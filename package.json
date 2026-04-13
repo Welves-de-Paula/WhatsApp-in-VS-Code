@@ -1,0 +1,75 @@
+{
+  "name": "whatsapp-multi",
+  "displayName": "WhatsApp Multi",
+  "description": "Gerencie até 2 contas do WhatsApp direto no VS Code com notificações e quick reply",
+  "version": "0.1.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:whatsappMulti.sidebar"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "whatsapp.quickReply",
+        "title": "WhatsApp: Quick Reply",
+        "icon": "$(reply)"
+      },
+      {
+        "command": "whatsapp.reconnectAccount1",
+        "title": "WhatsApp: Reconectar Conta 1"
+      },
+      {
+        "command": "whatsapp.reconnectAccount2",
+        "title": "WhatsApp: Reconectar Conta 2"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "whatsapp.quickReply",
+        "key": "ctrl+alt+w",
+        "mac": "cmd+alt+w"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "whatsapp-multi",
+          "title": "WhatsApp Multi",
+          "icon": "media/whatsapp.svg"
+        }
+      ]
+    },
+    "views": {
+      "whatsapp-multi": [
+        {
+          "type": "webview",
+          "id": "whatsappMulti.sidebar",
+          "name": "WhatsApp Multi"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/qrcode": "^1.5.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
+}
