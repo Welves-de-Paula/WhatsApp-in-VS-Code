@@ -11,7 +11,10 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:whatsappMulti.sidebar"
+    "onView:whatsappMulti.sidebar",
+    "onCommand:whatsapp.quickReply",
+    "onCommand:whatsapp.addAccount",
+    "onCommand:whatsapp.removeAccount"
   ],
   "main": "./out/extension.js",
   "contributes": {
