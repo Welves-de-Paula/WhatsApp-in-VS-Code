@@ -609,35 +609,13 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
 
     // ----------------------------------------------------------------
     // Player de áudio customizado
+    // Usa elementos <audio> já presentes no DOM (criados pelo servidor).
+    // NÃO usa "new Audio()" — bloqueado pelo sandbox do VS Code webview.
     // ----------------------------------------------------------------
-    const audioInstances = {}; // audioId → HTMLAudioElement
 
-    function getOrCreateAudio(player) {
-      const id = player.dataset.audioId;
-      if (!audioInstances[id]) {
-        const audio = new Audio(player.dataset.src);
-        audioInstances[id] = audio;
-
-        audio.addEventListener('loadedmetadata', function () {
-          player.querySelector('.audio-time').textContent =
-            '0:00 / ' + fmtTime(audio.duration);
-        });
-
-        audio.addEventListener('timeupdate', function () {
-          const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
-          player.querySelector('.audio-bar-fill').style.width = pct + '%';
-          player.querySelector('.audio-time').textContent =
-            fmtTime(audio.currentTime) + ' / ' + fmtTime(audio.duration);
-        });
-
-        audio.addEventListener('ended', function () {
-          player.querySelector('.audio-play-btn').textContent = '▶';
-          player.querySelector('.audio-bar-fill').style.width = '0%';
-          player.querySelector('.audio-time').textContent =
-            '0:00 / ' + fmtTime(audio.duration);
-        });
-      }
-      return audioInstances[id];
+    function getAudio(player) {
+      const elemId = player.dataset.audioElem;
+      return elemId ? document.getElementById(elemId) : null;
     }
 
     function fmtTime(sec) {
@@ -647,14 +625,45 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       return m + ':' + String(s).padStart(2, '0');
     }
 
+    // Vincula os listeners de um <audio> ao seu player container (uma vez)
+    function bindAudio(audio, player) {
+      if (audio.__bound) return;
+      audio.__bound = true;
+
+      audio.addEventListener('loadedmetadata', function () {
+        player.querySelector('.audio-time').textContent =
+          '0:00 / ' + fmtTime(audio.duration);
+      });
+
+      audio.addEventListener('timeupdate', function () {
+        const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+        player.querySelector('.audio-bar-fill').style.width = pct + '%';
+        player.querySelector('.audio-time').textContent =
+          fmtTime(audio.currentTime) + ' / ' + fmtTime(audio.duration);
+      });
+
+      audio.addEventListener('ended', function () {
+        player.querySelector('.audio-play-btn').textContent = '▶';
+        player.querySelector('.audio-bar-fill').style.width = '0%';
+        player.querySelector('.audio-time').textContent =
+          '0:00 / ' + fmtTime(audio.duration);
+      });
+
+      // Se os metadados já foram carregados antes do bind, atualiza o tempo
+      if (audio.readyState >= 1 && audio.duration) {
+        player.querySelector('.audio-time').textContent =
+          '0:00 / ' + fmtTime(audio.duration);
+      }
+    }
+
     // Pausa todos os outros players
-    function pauseOthers(exceptId) {
-      Object.entries(audioInstances).forEach(function(entry) {
-        const id = entry[0], audio = entry[1];
-        if (id !== exceptId && !audio.paused) {
-          audio.pause();
-          const p = document.querySelector('.audio-player[data-audio-id="' + id + '"]');
-          if (p) p.querySelector('.audio-play-btn').textContent = '▶';
+    function pauseOthers(exceptPlayer) {
+      document.querySelectorAll('.audio-player').forEach(function (p) {
+        if (p === exceptPlayer) return;
+        const a = getAudio(p);
+        if (a && !a.paused) {
+          a.pause();
+          p.querySelector('.audio-play-btn').textContent = '▶';
         }
       });
     }
@@ -666,12 +675,14 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       const player = btn.closest('.audio-player');
       if (!player) return;
 
-      const id = player.dataset.audioId;
-      const audio = getOrCreateAudio(player);
-      pauseOthers(id);
+      const audio = getAudio(player);
+      if (!audio) return;
+
+      bindAudio(audio, player);
+      pauseOthers(player);
 
       if (audio.paused) {
-        audio.play();
+        audio.play().catch(function () { /* autoplay bloqueado — ignora */ });
         btn.textContent = '⏸';
       } else {
         audio.pause();
@@ -686,8 +697,8 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       const player = track.closest('.audio-player');
       if (!player) return;
 
-      const audio = getOrCreateAudio(player);
-      if (!audio.duration) return;
+      const audio = getAudio(player);
+      if (!audio || !audio.duration) return;
 
       const rect = track.getBoundingClientRect();
       const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -765,12 +776,14 @@ function renderMediaContent(msg: MessageInfo): string {
 
     if (type === 'audio' || type === 'ptt') {
       const icon = type === 'ptt' ? '🎙️' : '🎵';
-      const safeId = escapeHtml(msg.id);
+      // Usa elemento <audio> real no DOM — mais confiável que new Audio() no webview
+      const elemId = 'aud_' + msg.id.replace(/[^a-zA-Z0-9]/g, '_');
       return `
-        <div class="audio-player" data-audio-id="${safeId}" data-src="${src}">
-          <button class="audio-play-btn" title="Reproduzir">▶</button>
+        <audio id="${elemId}" src="${src}" preload="auto" style="display:none"></audio>
+        <div class="audio-player" data-audio-elem="${elemId}">
+          <button class="audio-play-btn" title="Reproduzir/Pausar">▶</button>
           <div class="audio-progress-wrap">
-            <div class="audio-bar-track" data-track>
+            <div class="audio-bar-track">
               <div class="audio-bar-fill"></div>
             </div>
             <span class="audio-time">0:00 / 0:00</span>
