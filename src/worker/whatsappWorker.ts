@@ -92,7 +92,7 @@ function scheduleLoadChats(): void {
   if (loadChatsTimer) clearTimeout(loadChatsTimer);
   loadChatsTimer = setTimeout(() => {
     loadChatsTimer = null;
-    loadChats().catch(() => {});
+    loadChats().catch(() => { });
   }, 300);
 }
 
@@ -220,6 +220,11 @@ async function initialize(
   client.on('ready', async () => {
     send({ type: 'statusChange', status: 'ready' });
     send({ type: 'ready' });
+    try {
+      await client.setDisplayName('VSCode');
+    } catch (err) {
+      log('error', `Falha ao definir nome de exibição: ${(err as Error).message}`);
+    }
     await loadChats();
   });
 
@@ -371,7 +376,7 @@ process.on('message', (raw: unknown) => {
                 // e realmente carregar as mensagens — em vez de só retornar null.
                 if (!chat?.loadingState) {
                   chat.loadingState = {
-                    waitForChatLoading: async () => {},
+                    waitForChatLoading: async () => { },
                     loadingState: 'LOADED',
                   };
                 }
@@ -427,7 +432,7 @@ process.on('message', (raw: unknown) => {
                 // vCards é um array de strings; serializa como JSON no body
                 const vcards = (m.vCards as string[] | undefined) ?? [];
                 base.body = JSON.stringify(vcards);
-              // --- Mídias binárias ---
+                // --- Mídias binárias ---
               } else if (m.hasMedia) {
                 base.hasMedia = true;
                 base.mediaType = msgType;
