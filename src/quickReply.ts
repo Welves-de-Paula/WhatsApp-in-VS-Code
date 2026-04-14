@@ -96,7 +96,7 @@ async function showChatMessages(
       { enableScripts: true },
     );
 
-    const html = generateChatHtml(messages, chatName);
+    const html = generateChatHtml(messages, chatName, chatId, accountNickname);
     panel.webview.html = html;
 
   } catch (err: unknown) {
@@ -105,7 +105,7 @@ async function showChatMessages(
   }
 }
 
-function generateChatHtml(messages: MessageInfo[], chatName: string): string {
+function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: string, accountNickname: string): string {
   const msgsHtml = messages.map((msg) => {
     const time = new Date(msg.timestamp * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const fromMeClass = msg.fromMe ? 'from-me' : 'from-them';
@@ -128,8 +128,9 @@ function generateChatHtml(messages: MessageInfo[], chatName: string): string {
 <head>
   <meta charset="UTF-8">
   <style>
-    body { font-family: var(--vscode-font-family); padding: 10px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); }
+    body { font-family: var(--vscode-font-family); padding: 10px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); display: flex; flex-direction: column; height: 100vh; margin: 0; }
     h2 { margin: 0 0 10px 0; font-size: 16px; }
+    .chat-container { flex: 1; overflow-y: auto; }
     .message { margin: 8px 0; padding: 8px 12px; border-radius: 4px; max-width: 70%; border: 1px solid var(--vscode-focusBorder); }
     .from-me { margin-left: auto; }
     .message-content { word-wrap: break-word; }
@@ -137,11 +138,39 @@ function generateChatHtml(messages: MessageInfo[], chatName: string): string {
     .sender { font-weight: bold; }
     .time { margin-left: 8px; }
     .empty { text-align: center; opacity: 0.6; margin-top: 20px; }
+    .input-container { display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid var(--vscode-focusBorder); }
+    .input-container input { flex: 1; padding: 8px; border: 1px solid var(--vscode-focusBorder); border-radius: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
+    .input-container button { padding: 8px 16px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; cursor: pointer; }
+    .input-container button:hover { background: var(--vscode-button-hoverBackground); }
   </style>
 </head>
 <body>
   <h2>${escapeHtml(chatName)}</h2>
-  ${msgsHtml || '<div class="empty">Nenhuma mensagem</div>'}
+  <div class="chat-container">
+    ${msgsHtml || '<div class="empty">Nenhuma mensagem</div>'}
+  </div>
+  <div class="input-container">
+    <input type="text" id="msg-input" placeholder="Digite uma mensagem…" />
+    <button id="send-btn">Enviar</button>
+  </div>
+  <script>
+    const vscode = acquireVsCodeApi();
+    const chatId = "${chatId}";
+    const accountNickname = "${accountNickname}";
+    
+    document.getElementById('send-btn').addEventListener('click', sendMessage);
+    document.getElementById('msg-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+    
+    function sendMessage() {
+      const input = document.getElementById('msg-input');
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      vscode.postMessage({ command: 'sendChatMessage', chatId, accountNickname, text });
+    }
+  </script>
 </body>
 </html>
   `;

@@ -43,6 +43,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           void vscode.commands.executeCommand('whatsapp.quickReply');
           break;
 
+        case 'sendChatMessage':
+          if (raw.chatId?.trim() && raw.accountNickname?.trim() && raw.text?.trim()) {
+            const client = this.accountManager.getClient(raw.accountNickname.trim());
+            if (client) {
+              void client.sendMessage(raw.chatId.trim(), raw.text.trim())
+                .then(() => {
+                  void vscode.window.showInformationMessage('Mensagem enviada!');
+                })
+                .catch((err: unknown) => {
+                  void vscode.window.showErrorMessage(`Erro: ${(err as Error).message}`);
+                });
+            }
+          }
+          break;
+
         case 'addAccount':
           if (raw.nickname?.trim()) {
             void this.accountManager.addAccount(raw.nickname.trim()).catch(
