@@ -98,6 +98,7 @@ async function showChatMessages(
       vscode.ViewColumn.One,
       { enableScripts: true },
     );
+    registerChatWebviewHandler(panel, accountManager, { accountNickname, chatId });
 
     const html = generateChatHtml(messages, chatName, chatId, accountNickname);
     panel.webview.html = html;
@@ -223,9 +224,19 @@ function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: str
       flex-shrink: 0;
     }
     .input-container button:hover { background: var(--vscode-button-hoverBackground); }
+    .input-container button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .send-error {
+      min-height: 16px;
+      margin-top: 6px;
+      color: var(--vscode-errorForeground, #f14c4c);
+      font-size: 11px;
+    }
   </style>
 </head>
-<body>
+<body data-chat-id="${escapeHtml(chatId)}" data-account-nickname="${escapeHtml(accountNickname)}">
   <h2>${escapeHtml(chatName)}</h2>
   <div class="chat-container" id="chat-container">
     ${msgsHtml || '<div class="empty">Nenhuma mensagem</div>'}
@@ -235,27 +246,90 @@ function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: str
       <input type="text" id="msg-input" placeholder="Digite uma mensagem…" autocomplete="off" />
       <button id="send-btn">Enviar</button>
     </div>
+    <div id="send-error" class="send-error"></div>
   </div>
   <script>
     const vscode = acquireVsCodeApi();
-    const chatId = "${chatId}";
-    const accountNickname = "${accountNickname}";
+    const currentChatId = document.body.dataset.chatId || '';
+    void document.body.dataset.accountNickname;
+    let isSending = false;
+    let pendingText = '';
     
     // Scroll para o final ao abrir
     var container = document.getElementById('chat-container');
     container.scrollTop = container.scrollHeight;
 
-    document.getElementById('send-btn').addEventListener('click', sendMessage);
-    document.getElementById('msg-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') sendMessage();
+    const sendButton = document.getElementById('send-btn');
+    const input = document.getElementById('msg-input');
+    const errorEl = document.getElementById('send-error');
+
+    sendButton.addEventListener('click', sendMessage);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    window.addEventListener('message', (event) => {
+      const data = event.data || {};
+      if (data.command !== 'messageSent') return;
+
+      isSending = false;
+      sendButton.disabled = false;
+
+      if (data.success) {
+        appendLocalMessage(pendingText);
+        input.value = '';
+        pendingText = '';
+        errorEl.textContent = '';
+        return;
+      }
+
+      errorEl.textContent = data.error || 'Falha ao enviar a mensagem.';
     });
     
     function sendMessage() {
-      const input = document.getElementById('msg-input');
       const text = input.value.trim();
-      if (!text) return;
-      input.value = '';
-      vscode.postMessage({ command: 'sendChatMessage', chatId, accountNickname, text });
+      if (!text || isSending || !currentChatId) return;
+      isSending = true;
+      pendingText = text;
+      sendButton.disabled = true;
+      errorEl.textContent = '';
+      vscode.postMessage({ command: 'sendMessage', chatId: currentChatId, text });
+    }
+
+    function appendLocalMessage(text) {
+      const emptyEl = container.querySelector('.empty');
+      if (emptyEl) emptyEl.remove();
+
+      const msgEl = document.createElement('div');
+      msgEl.className = 'message from-me';
+
+      const contentEl = document.createElement('div');
+      contentEl.className = 'message-content';
+      contentEl.textContent = text;
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'message-meta';
+
+      const senderEl = document.createElement('span');
+      senderEl.className = 'sender';
+      senderEl.textContent = 'VocÃª';
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'time';
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      timeEl.textContent = hh + ':' + mm;
+
+      metaEl.appendChild(senderEl);
+      metaEl.appendChild(timeEl);
+      msgEl.appendChild(contentEl);
+      msgEl.appendChild(metaEl);
+      container.appendChild(msgEl);
+      container.scrollTop = container.scrollHeight;
     }
   </script>
 </body>
@@ -332,6 +406,7 @@ export async function executeOpenChat(
       vscode.ViewColumn.One,
       { enableScripts: true },
     );
+    registerChatWebviewHandler(chatPanel, accountManager);
     chatPanel.onDidDispose(() => {
       chatPanel = undefined;
       currentChatInfo = undefined;
@@ -369,4 +444,62 @@ function generateLoadingHtml(chatName: string): string {
   <p>Carregando ${escapeHtml(chatName)}...</p>
 </body>
 </html>`;
+}
+
+function registerChatWebviewHandler(
+  panel: vscode.WebviewPanel,
+  accountManager: AccountManager,
+  context?: { accountNickname: string; chatId: string },
+): void {
+  panel.webview.onDidReceiveMessage(async (raw: { command?: string; chatId?: string; text?: string }) => {
+    if (raw.command !== 'sendMessage') {
+      return;
+    }
+
+    const chatId = raw.chatId?.trim();
+    const text = raw.text?.trim();
+    const activeChatInfo = currentChatInfo;
+    const expectedChatId = context?.chatId ?? activeChatInfo?.chatId;
+
+    if (!chatId || !text) {
+      void panel.webview.postMessage({
+        command: 'messageSent',
+        success: false,
+        error: 'Chat ou mensagem invÃ¡lida.',
+      });
+      return;
+    }
+
+    if (expectedChatId && expectedChatId !== chatId) {
+      void panel.webview.postMessage({
+        command: 'messageSent',
+        success: false,
+        error: 'Conversa ativa mudou. Abra a conversa novamente.',
+      });
+      return;
+    }
+
+    const accountNickname = context?.accountNickname ?? activeChatInfo?.accountNickname ?? '';
+    const client = accountManager.getClient(accountNickname);
+    if (!client) {
+      void panel.webview.postMessage({
+        command: 'messageSent',
+        success: false,
+        error: 'Conta nÃ£o encontrada para esta conversa.',
+      });
+      return;
+    }
+
+    try {
+      await client.sendMessage(chatId, text);
+      void panel.webview.postMessage({ command: 'messageSent', success: true });
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      void panel.webview.postMessage({
+        command: 'messageSent',
+        success: false,
+        error: errorMessage,
+      });
+    }
+  });
 }

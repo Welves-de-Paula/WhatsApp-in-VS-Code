@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import { AccountManager } from './AccountManager';
 import { WWebMessage } from './WhatsAppClient';
 import { AccountNotificationSettings } from './types';
@@ -147,6 +148,8 @@ export class NotificationManager {
       );
     }
 
+    if (!fs.existsSync(filePath)) return;
+
     const platform = process.platform;
     let cmd: string;
     let args: string[];
@@ -162,9 +165,9 @@ export class NotificationManager {
     } else {
       // Windows — PowerShell SoundPlayer
       const escaped = filePath.replace(/'/g, "''");
-      const ps = `$p=(New-Object Media.SoundPlayer '${escaped}');$p.PlaySync()`;
-      cmd = 'powershell';
-      args = ['-NonInteractive', '-NoProfile', '-Command', ps];
+      const ps = `$ErrorActionPreference='Stop';$p=New-Object System.Media.SoundPlayer '${escaped}';$p.Load();$p.PlaySync()`;
+      cmd = 'powershell.exe';
+      args = ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', ps];
     }
 
     const child = cp.spawn(cmd, args, { detached: true, stdio: 'ignore' });
