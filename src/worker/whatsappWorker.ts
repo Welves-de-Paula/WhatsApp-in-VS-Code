@@ -169,8 +169,9 @@ async function loadChats(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawChats: any[] = await client.getChats();
     const filteredChats = rawChats.filter((chat: any) => {
-      const isPinned = chat.pinned === true || chat.pin !== undefined;
-      const isArchived = chat.archived === true || chat.archive !== undefined;
+      const isPinned = chat.pinned === true || chat.pin === 1;
+      // Filter out archived chats (keep pinned ones)
+      const isArchived = chat.archived === true || chat.archived === 1;
       return isPinned || !isArchived;
     });
     const chats: SerializedChat[] = filteredChats.slice(0, 30).map(
@@ -243,7 +244,7 @@ process.on('message', (raw: unknown) => {
           if (!client) {
             throw new Error('Cliente não está pronto');
           }
-          
+
           // Tenta primeiro pelo método do cliente
           try {
             const chat = await client.getChatById(msg.chatId);
@@ -261,20 +262,20 @@ process.on('message', (raw: unknown) => {
             // Se falhar, tenta via Puppeteer
             log('info', 'Método padrão falhou, tentando via Puppeteer');
           }
-          
+
           // Fallback: tenta acessar via Puppeteer
           // @ts-ignore - page é acessível internamente
           const page = client.page || (client as any).pupPage;
           if (!page) {
             throw new Error('Navegador não disponível');
           }
-          
+
           // Vai para o chat primeiro
-          await page.goto(`https://web.whatsapp.com/app?chat=${msg.chatId}`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
+          await page.goto(`https://web.whatsapp.com/app?chat=${msg.chatId}`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => { });
           await new Promise(r => setTimeout(r, 3000));
-          
+
           await page.waitForSelector('#app', { timeout: 10000 });
-          
+
           const messages = await page.evaluate((cid: string) => {
             // @ts-ignore
             const w = window as any;
@@ -296,7 +297,7 @@ process.on('message', (raw: unknown) => {
                   }
                 });
               }
-              
+
               // Método 2: Se não achou, tenta pela UI
               if (result.length === 0) {
                 const messagePanels = document.querySelectorAll('[data-message-id]');
@@ -312,7 +313,7 @@ process.on('message', (raw: unknown) => {
                       const match = timeEl.getAttribute('data-pre-plain-text')?.match(/\d+/);
                       if (match) timestamp = parseInt(match[0]);
                     }
-                    
+
                     result.push({
                       id: msgId,
                       body: body,
@@ -320,10 +321,10 @@ process.on('message', (raw: unknown) => {
                       timestamp: timestamp,
                       sender: ''
                     });
-                  } catch(e) {}
+                  } catch (e) { }
                 });
               }
-              
+
               // Método 3: Tenta Store.Msg
               if (result.length === 0 && w.Store.Msg) {
                 try {
@@ -342,14 +343,14 @@ process.on('message', (raw: unknown) => {
                       });
                     }
                   }
-                } catch(e) {}
+                } catch (e) { }
               }
             } catch (e) {
               // ignora
             }
             return result.slice(-50);
           }, msg.chatId);
-          
+
           send({ type: 'sendResult', success: true, messages });
         } catch (err) {
           send({
