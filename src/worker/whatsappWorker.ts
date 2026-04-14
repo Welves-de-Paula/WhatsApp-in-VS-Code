@@ -13,6 +13,7 @@ import * as path from 'path';
 type HostToWorkerMsg =
   | { type: 'initialize'; storagePath: string; sessionId: string }
   | { type: 'sendMessage'; chatId: string; text: string }
+  | { type: 'getMessages'; chatId: string }
   | { type: 'destroy' };
 
 type WorkerToHostMsg =
@@ -21,7 +22,7 @@ type WorkerToHostMsg =
   | { type: 'statusChange'; status: string }
   | { type: 'chatsUpdate'; chats: SerializedChat[] }
   | { type: 'message'; from: string; body: string; notifyName?: string }
-  | { type: 'sendResult'; success: boolean; error?: string }
+  | { type: 'sendResult'; success: boolean; messages?: SerializedMessage[]; error?: string }
   | { type: 'log'; level: 'info' | 'error'; message: string };
 
 interface SerializedChat {
@@ -30,6 +31,14 @@ interface SerializedChat {
   lastMessage: string;
   timestamp: number;
   unreadCount: number;
+}
+
+interface SerializedMessage {
+  id: string;
+  body: string;
+  fromMe: boolean;
+  timestamp: number;
+  sender: string;
 }
 
 function send(msg: WorkerToHostMsg): void {
@@ -205,6 +214,37 @@ process.on('message', (raw: unknown) => {
           await client.sendMessage(msg.chatId, msg.text);
           await loadChats();
           send({ type: 'sendResult', success: true });
+        } catch (err) {
+          send({
+            type: 'sendResult',
+            success: false,
+            error: (err as Error).message,
+          });
+        }
+      })();
+      break;
+
+    case 'getMessages':
+      if (!client) {
+        send({
+          type: 'sendResult',
+          success: false,
+          error: 'Cliente não conectado.',
+        });
+        break;
+      }
+      (async () => {
+        try {
+          const chat = await client.getChatById(msg.chatId);
+          const messages = await chat.fetchMessages({ limit: 50 });
+          const serialized: SerializedMessage[] = messages.map((m: any) => ({
+            id: m.id._serialized as string,
+            body: m.body as string,
+            fromMe: m.fromMe as boolean,
+            timestamp: (m.timestamp as number) ?? 0,
+            sender: (m._data?.notifyName as string) ?? m.from.replace(/@[cg]\.us$/, ''),
+          }));
+          send({ type: 'sendResult', success: true, messages: serialized });
         } catch (err) {
           send({
             type: 'sendResult',

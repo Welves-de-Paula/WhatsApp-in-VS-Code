@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import { ChildProcess, fork } from 'child_process';
-import { AccountStatus, ChatInfo } from './types';
+import { AccountStatus, ChatInfo, MessageInfo } from './types';
 
 // ---- IPC types (espelhadas do worker) ----
 
@@ -17,6 +17,7 @@ type WorkerToHostMsg =
 type HostToWorkerMsg =
   | { type: 'initialize'; storagePath: string; sessionId: string }
   | { type: 'sendMessage'; chatId: string; text: string }
+  | { type: 'getMessages'; chatId: string }
   | { type: 'destroy' };
 
 // ---------------------------------------------------------------------------
@@ -140,6 +141,21 @@ export class WhatsAppClient extends EventEmitter {
       };
       this.sendResultHandlers.push(handler);
       this.sendToWorker({ type: 'sendMessage', chatId, text });
+    });
+  }
+
+  async getChatMessages(chatId: string): Promise<MessageInfo[]> {
+    if (!this.worker || this.status !== 'ready') {
+      throw new Error(`Conta "${this.nickname}" não está conectada.`);
+    }
+
+    return new Promise((resolve, reject) => {
+      const handler = (result: { success: boolean; messages?: MessageInfo[]; error?: string }) => {
+        if (result.success && result.messages) resolve(result.messages);
+        else reject(new Error(result.error ?? 'Falha ao carregar mensagens.'));
+      };
+      this.sendResultHandlers.push(handler);
+      this.sendToWorker({ type: 'getMessages', chatId });
     });
   }
 

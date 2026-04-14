@@ -18,6 +18,14 @@ export interface ChatInfo {
   accountNickname: string;
 }
 
+export interface MessageInfo {
+  id: string;
+  body: string;
+  fromMe: boolean;
+  timestamp: number;
+  sender: string;
+}
+
 export interface AccountState {
   nickname: string;
   status: AccountStatus;
