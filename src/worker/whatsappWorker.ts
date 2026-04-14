@@ -148,11 +148,17 @@ function forwardIncomingMessage(msg: any): void {
     const id = String(rawId).trim();
     if (id && markIncomingMessageSeen(id)) return;
 
+    const notifyName: string | undefined =
+      (msg?._data as { notifyName?: string } | undefined)?.notifyName ||
+      (msg?.pushname as string | undefined) ||
+      (msg?._data as { pushname?: string } | undefined)?.pushname ||
+      undefined;
+
     send({
       type: 'message',
       from,
       body,
-      notifyName: (msg?._data as { notifyName?: string } | undefined)?.notifyName,
+      notifyName,
     });
   } catch (err) {
     log('error', `forwardIncomingMessage: ${(err as Error).message}`);
