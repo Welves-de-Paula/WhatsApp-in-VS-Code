@@ -51,12 +51,24 @@ export interface ChatInfo {
   accountNickname: string;
 }
 
+export type MediaType = 'image' | 'sticker' | 'audio' | 'ptt' | 'video' | 'gif' | 'document' | string;
+
 export interface MessageInfo {
   id: string;
   body: string;
   fromMe: boolean;
   timestamp: number;
   sender: string;
+  /** true se a mensagem tem mídia (imagem, áudio, figurinha, etc.) */
+  hasMedia?: boolean;
+  /** 'image' | 'sticker' | 'audio' | 'ptt' | 'video' | 'gif' | 'document' */
+  mediaType?: MediaType;
+  /** Conteúdo em base64 */
+  mediaData?: string;
+  /** MIME type, ex.: 'image/jpeg', 'audio/ogg; codecs=opus' */
+  mediaMime?: string;
+  /** Nome do arquivo (documentos) */
+  mediaFilename?: string;
 }
 
 export interface AccountState {

@@ -9,10 +9,11 @@ interface ChatPickItem extends vscode.QuickPickItem {
 }
 
 /**
- * Mapa de painéis abertos, indexado por chatId.
- * Evita abrir painéis duplicados e libera memória quando fechados.
+ * Painel único reutilizado para todas as conversas.
+ * Ao abrir um chat diferente, o mesmo painel é atualizado em vez de criar um novo.
  */
-const chatPanels = new Map<string, vscode.WebviewPanel>();
+let activeChatPanel: vscode.WebviewPanel | undefined;
+let activeChatContext: { chatId: string; accountNickname: string } | undefined;
 
 // ---------------------------------------------------------------------------
 // Public entry points
@@ -117,42 +118,35 @@ async function openChatPanel(
     return;
   }
 
-  // Reutiliza painel já aberto para este chat
-  const existing = chatPanels.get(chatId);
-  if (existing) {
-    existing.reveal(vscode.ViewColumn.One);
-    // Recarrega mensagens no painel existente
-    existing.webview.html = generateLoadingHtml(chatName);
-    try {
-      const messages = await client.getChatMessages(chatId);
-      if (chatPanels.get(chatId) === existing) {
-        existing.webview.html = generateChatHtml(existing.webview, messages, chatName, chatId, accountNickname);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      void vscode.window.showErrorMessage(`Erro ao carregar mensagens: ${message}`);
-    }
-    return;
+  if (!activeChatPanel) {
+    // Cria o painel uma única vez
+    activeChatPanel = vscode.window.createWebviewPanel(
+      'whatsappChat',
+      `${chatName} - WhatsApp`,
+      vscode.ViewColumn.One,
+      { enableScripts: true, localResourceRoots: [extensionUri], retainContextWhenHidden: true },
+    );
+    activeChatPanel.onDidDispose(() => {
+      activeChatPanel = undefined;
+      activeChatContext = undefined;
+    });
+  } else {
+    // Reutiliza o painel existente: atualiza título e traz para frente
+    activeChatPanel.title = `${chatName} - WhatsApp`;
+    activeChatPanel.reveal(vscode.ViewColumn.One, true);
   }
 
-  // Cria novo painel
-  const panel = vscode.window.createWebviewPanel(
-    'whatsappChat',
-    `${chatName} - WhatsApp`,
-    vscode.ViewColumn.One,
-    { enableScripts: true, localResourceRoots: [extensionUri] },
-  );
+  // Atualiza contexto e registra handler para o novo chat
+  activeChatContext = { chatId, accountNickname };
+  registerChatWebviewHandler(activeChatPanel, accountManager, activeChatContext);
 
-  chatPanels.set(chatId, panel);
-  panel.onDidDispose(() => chatPanels.delete(chatId));
-  registerChatWebviewHandler(panel, accountManager, { accountNickname, chatId });
-
+  const panel = activeChatPanel;
   panel.webview.html = generateLoadingHtml(chatName);
 
   try {
     const messages = await client.getChatMessages(chatId);
-    // Verifica se o painel ainda existe (pode ter sido fechado durante o await)
-    if (chatPanels.get(chatId) === panel) {
+    // Garante que o painel não foi fechado nem trocado durante o await
+    if (activeChatPanel === panel && activeChatContext?.chatId === chatId) {
       panel.webview.html = generateChatHtml(panel.webview, messages, chatName, chatId, accountNickname);
     }
   } catch (err: unknown) {
@@ -165,11 +159,23 @@ async function openChatPanel(
 // WebviewPanel message handler
 // ---------------------------------------------------------------------------
 
+/**
+ * Registra (ou re-registra) o handler de mensagens do painel.
+ * Como o mesmo painel é reutilizado para diferentes chats, usamos uma
+ * referência mutável ao contexto ativo em vez de capturar um valor fixo.
+ */
 function registerChatWebviewHandler(
   panel: vscode.WebviewPanel,
   accountManager: AccountManager,
-  context: { accountNickname: string; chatId: string },
+  contextRef: { chatId: string; accountNickname: string },
 ): void {
+  // Remove listeners anteriores substituindo o HTML (feito pelo chamador).
+  // O listener do webview é acumulativo — registramos apenas uma vez por painel.
+  if ((panel as vscode.WebviewPanel & { __handlerRegistered?: boolean }).__handlerRegistered) {
+    return;
+  }
+  (panel as vscode.WebviewPanel & { __handlerRegistered?: boolean }).__handlerRegistered = true;
+
   panel.webview.onDidReceiveMessage(async (raw: { command?: string; chatId?: string; text?: string }) => {
     if (raw.command !== 'sendMessage') return;
 
@@ -181,12 +187,14 @@ function registerChatWebviewHandler(
       return;
     }
 
-    if (chatId !== context.chatId) {
+    // Lê o contexto atual no momento do envio (pode ter mudado desde o registro)
+    const current = activeChatContext;
+    if (!current || chatId !== current.chatId) {
       void panel.webview.postMessage({ command: 'messageSent', success: false, error: 'Conversa ativa mudou. Abra a conversa novamente.' });
       return;
     }
 
-    const client = accountManager.getClient(context.accountNickname);
+    const client = accountManager.getClient(current.accountNickname);
     if (!client) {
       void panel.webview.postMessage({ command: 'messageSent', success: false, error: 'Conta não encontrada para esta conversa.' });
       return;
@@ -203,6 +211,8 @@ function registerChatWebviewHandler(
       });
     }
   });
+
+  void contextRef; // referência usada indiretamente via activeChatContext
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +273,8 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
     `default-src 'none'`,
     `style-src 'nonce-${nonce}'`,
     `script-src 'nonce-${nonce}'`,
+    `img-src data: blob:`,
+    `media-src data: blob:`,
   ].join('; ');
 
   const msgsHtml = messages.map((msg) => {
@@ -272,7 +284,7 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
 
     return `
       <div class="message ${fromMeClass}">
-        <div class="message-content">${escapeHtml(msg.body)}</div>
+        <div class="message-content">${renderMediaContent(msg)}</div>
         <div class="message-meta">
           <span class="sender">${escapeHtml(senderLabel)}</span>
           <span class="time">${time}</span>
@@ -392,6 +404,47 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       color: var(--vscode-errorForeground, #f14c4c);
       font-size: 11px;
     }
+
+    /* ---- Mídia ---- */
+    .media-img {
+      display: block;
+      max-width: 220px;
+      max-height: 280px;
+      border-radius: 6px;
+      object-fit: cover;
+      cursor: zoom-in;
+    }
+    .media-sticker {
+      display: block;
+      max-width: 140px;
+      max-height: 140px;
+      background: transparent;
+    }
+    .media-audio {
+      display: block;
+      width: 240px;
+      max-width: 100%;
+      margin: 2px 0;
+    }
+    .media-video {
+      display: block;
+      max-width: 260px;
+      max-height: 300px;
+      border-radius: 6px;
+    }
+    .media-doc {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 2px 0;
+    }
+    .media-doc-icon { font-size: 18px; }
+    .media-none {
+      font-size: 11px;
+      opacity: 0.5;
+      font-style: italic;
+    }
   </style>
 </head>
 <body data-chat-id="${escapeHtml(chatId)}" data-account-nickname="${escapeHtml(accountNickname)}">
@@ -485,6 +538,63 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
 </body>
 </html>
   `;
+}
+
+function renderMediaContent(msg: MessageInfo): string {
+  // Sem mídia — texto simples
+  if (!msg.hasMedia) {
+    return msg.body ? escapeHtml(msg.body) : '';
+  }
+
+  const type = msg.mediaType ?? '';
+
+  // Mídia baixada com sucesso
+  if (msg.mediaData && msg.mediaMime) {
+    const src = `data:${escapeHtml(msg.mediaMime)};base64,${msg.mediaData}`;
+
+    if (type === 'sticker') {
+      return `<img class="media-sticker" src="${src}" alt="Figurinha">`;
+    }
+
+    if (type === 'image') {
+      return `<img class="media-img" src="${src}" alt="Imagem">`;
+    }
+
+    if (type === 'gif') {
+      // GIFs no WhatsApp chegam como vídeo mp4 sem áudio
+      return `<video class="media-video" autoplay loop muted playsinline src="${src}"></video>`;
+    }
+
+    if (type === 'video') {
+      return `<video class="media-video" controls src="${src}"></video>`;
+    }
+
+    if (type === 'audio' || type === 'ptt') {
+      return `<audio class="media-audio" controls src="${src}"></audio>`;
+    }
+
+    if (type === 'document') {
+      const name = escapeHtml(msg.mediaFilename ?? 'documento');
+      return `<div class="media-doc"><span class="media-doc-icon">📎</span>${name}</div>`;
+    }
+
+    // Tipo desconhecido mas com dados — tenta imagem como fallback
+    return `<img class="media-img" src="${src}" alt="${escapeHtml(type)}">`;
+  }
+
+  // Mídia existe mas download falhou
+  const labels: Record<string, string> = {
+    image: '🖼️ Imagem',
+    sticker: '😊 Figurinha',
+    audio: '🔊 Áudio',
+    ptt: '🎙️ Áudio',
+    video: '🎬 Vídeo',
+    gif: '🎞️ GIF',
+    document: '📎 Documento',
+  };
+  const label = labels[type] ?? '📎 Mídia';
+  const filename = msg.mediaFilename ? ` — ${escapeHtml(msg.mediaFilename)}` : '';
+  return `<span class="media-none">${label}${filename}</span>`;
 }
 
 function escapeHtml(text: string): string {

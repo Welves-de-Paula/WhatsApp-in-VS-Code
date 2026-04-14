@@ -39,6 +39,11 @@ interface SerializedMessage {
   fromMe: boolean;
   timestamp: number;
   sender: string;
+  hasMedia?: boolean;
+  mediaType?: string;
+  mediaData?: string;
+  mediaMime?: string;
+  mediaFilename?: string;
 }
 
 function send(msg: WorkerToHostMsg): void {
@@ -298,46 +303,100 @@ process.on('message', (raw: unknown) => {
         try {
           log('info', `Buscando mensagens do chat: ${msg.chatId}`);
 
-          // fetchMessages() chama internamente ConversationMsgs.loadEarlierMsgs →
-          // waitForChatLoading, que falha quando o chat não está ativo na página.
-          // Solução: ler diretamente do window.Store via pupPage.evaluate,
-          // sem tentar carregar mensagens antigas nem navegar.
+          // fetchMessages() dispara internamente um while-loop que chama
+          // ConversationMsgs.loadEarlierMsgs(chat). Essa função acessa
+          // chat.loadingState.waitForChatLoading — mas loadingState é undefined
+          // em chats que nunca foram abertos nesta sessão, causando o crash.
+          //
+          // Solução: patchear loadEarlierMsgs UMA VEZ no contexto do browser
+          // para retornar null quando loadingState não existe.
+          // Isso quebra o while-loop imediatamente, e fetchMessages devolve
+          // apenas as mensagens já presentes em memória — sem crash.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const page: any = client.pupPage ?? client.page;
           if (!page) throw new Error('Página do navegador não disponível.');
 
-          type RawMsg = { id: string; body: string; fromMe: boolean; timestamp: number; sender: string };
-          type EvalResult = RawMsg[] | { error: string };
-
-          const result: EvalResult = await page.evaluate((chatId: string): EvalResult => {
-            try {
+          await page.evaluate(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const w = window as any;
+            const convMsgs = w.Store?.ConversationMsgs;
+            if (convMsgs?.loadEarlierMsgs && !convMsgs.__patchedByCCExt) {
+              const orig = convMsgs.loadEarlierMsgs;
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const w = window as any;
-              const chat = w.Store?.Chat?.get?.(chatId);
-              if (!chat) return { error: 'Chat não encontrado no store.' };
-
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const models: any[] = chat.msgs?._models ?? chat.msgs?.models ?? [];
-              if (!Array.isArray(models)) return { error: 'Estrutura de mensagens inesperada.' };
-
-              return models.slice(-50).map((m) => ({
-                id: (m.id?._serialized ?? m.id?.id ?? '') as string,
-                body: (m.body ?? '') as string,
-                fromMe: !!(m.id?.fromMe ?? m.fromMe),
-                timestamp: (m.t ?? m.timestamp ?? 0) as number,
-                sender: (m._data?.notifyName ?? m.author?.replace(/@\w+\.us$/, '') ?? '') as string,
-              }));
-            } catch (e) {
-              return { error: (e as Error).message };
+              convMsgs.loadEarlierMsgs = async function (chat: any, ...args: any[]) {
+                // loadEarlierMsgs acessa chat.loadingState.waitForChatLoading
+                // mas loadingState é undefined em chats não abertos nesta sessão.
+                // Criamos um stub mínimo para que a função original possa prosseguir
+                // e realmente carregar as mensagens — em vez de só retornar null.
+                if (!chat?.loadingState) {
+                  chat.loadingState = {
+                    waitForChatLoading: async () => {},
+                    loadingState: 'LOADED',
+                  };
+                }
+                try {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  return await (orig as any).call(this, chat, ...args);
+                } catch {
+                  // Se a função original ainda falhar por outro motivo,
+                  // retorna null para encerrar o loop sem crash
+                  return null;
+                }
+              };
+              convMsgs.__patchedByCCExt = true;
             }
-          }, msg.chatId);
+          });
 
-          if (!Array.isArray(result)) {
-            throw new Error(result.error ?? 'Erro desconhecido ao ler mensagens.');
+          // Com o patch aplicado, fetchMessages é seguro de chamar
+          let allChats: any[] = cachedAllChats;
+          if (allChats.length === 0) {
+            allChats = await client.getChats();
+            cachedAllChats = allChats;
           }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const chat = allChats.find((c: any) => c.id._serialized === msg.chatId);
+          if (!chat) throw new Error('Chat não encontrado.');
 
-          log('info', `Mensagens obtidas: ${result.length}`);
-          send({ type: 'sendResult', requestId: msg.requestId, success: true, messages: result });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rawMessages: any[] = await chat.fetchMessages({ limit: 50 });
+          log('info', `Mensagens obtidas: ${rawMessages.length}`);
+
+          // Baixa mídias em paralelo com Promise.allSettled para não travar
+          // se algum download falhar (imagem corrompida, timeout, etc.)
+          const messages: SerializedMessage[] = await Promise.all(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            rawMessages.map(async (m: any): Promise<SerializedMessage> => {
+              const base: SerializedMessage = {
+                id: m.id._serialized as string,
+                body: (m.body as string) || '',
+                fromMe: m.fromMe as boolean,
+                timestamp: m.timestamp as number,
+                sender: (m._data?.notifyName as string | undefined)
+                  || (m.from as string | undefined)?.replace(/@[cg]\.us$/, '')
+                  || '',
+              };
+
+              if (m.hasMedia) {
+                base.hasMedia = true;
+                base.mediaType = m.type as string;
+                try {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const media: any = await m.downloadMedia();
+                  if (media?.data) {
+                    base.mediaData = media.data as string;
+                    base.mediaMime = media.mimetype as string;
+                    base.mediaFilename = (media.filename as string | undefined) ?? undefined;
+                  }
+                } catch {
+                  // download falhou — exibe placeholder no webview
+                }
+              }
+
+              return base;
+            }),
+          );
+
+          send({ type: 'sendResult', requestId: msg.requestId, success: true, messages });
         } catch (err) {
           send({
             type: 'sendResult',
