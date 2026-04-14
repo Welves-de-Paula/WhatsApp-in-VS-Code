@@ -131,36 +131,120 @@ function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: str
 <head>
   <meta charset="UTF-8">
   <style>
-    body { font-family: var(--vscode-font-family); padding: 10px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); display: flex; flex-direction: column; height: 100vh; margin: 0; }
-    h2 { margin: 0 0 10px 0; font-size: 16px; }
-    .chat-container { flex: 1; overflow-y: auto; }
-    .message { margin: 8px 0; padding: 8px 12px; border-radius: 4px; max-width: 70%; border: 1px solid var(--vscode-focusBorder); }
-    .from-me { margin-left: auto; }
-    .message-content { word-wrap: break-word; }
-    .message-meta { font-size: 11px; opacity: 0.7; margin-top: 4px; display: flex; justify-content: space-between; }
-    .sender { font-weight: bold; }
-    .time { margin-left: 8px; }
-    .empty { text-align: center; opacity: 0.6; margin-top: 20px; }
-    .input-container { display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid var(--vscode-focusBorder); }
-    .input-container input { flex: 1; padding: 8px; border: 1px solid var(--vscode-focusBorder); border-radius: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
-    .input-container button { padding: 8px 16px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; cursor: pointer; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      background: var(--vscode-editor-background);
+      color: var(--vscode-editor-foreground);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    h2 {
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid var(--vscode-panel-border, #333);
+      flex-shrink: 0;
+    }
+    .chat-container {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 10px 14px 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .message {
+      padding: 7px 11px;
+      border-radius: 8px;
+      max-width: 72%;
+      word-wrap: break-word;
+      background: var(--vscode-editorWidget-background, #2a2a2a);
+      border: 1px solid var(--vscode-panel-border, transparent);
+    }
+    .from-me {
+      align-self: flex-end;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-color: transparent;
+    }
+    .from-them { align-self: flex-start; }
+    .message-content { font-size: 13px; line-height: 1.4; }
+    .message-meta {
+      font-size: 10px;
+      opacity: 0.6;
+      margin-top: 3px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .sender { font-weight: 600; }
+    .empty { text-align: center; opacity: 0.5; margin-top: 32px; font-size: 12px; }
+    .input-wrapper {
+      flex-shrink: 0;
+      padding: 8px 12px 10px;
+      background: var(--vscode-editor-background);
+      box-shadow: 0 -4px 12px rgba(0,0,0,0.25);
+      border-top: 1px solid var(--vscode-panel-border, #333);
+    }
+    .input-container {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 8px;
+      padding: 4px 4px 4px 12px;
+      transition: border-color 0.15s;
+    }
+    .input-container:focus-within { border-color: var(--vscode-focusBorder); }
+    .input-container input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--vscode-input-foreground);
+      font-size: 13px;
+      font-family: var(--vscode-font-family);
+      outline: none;
+      padding: 4px 0;
+    }
+    .input-container button {
+      padding: 5px 14px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: var(--vscode-font-family);
+      flex-shrink: 0;
+    }
     .input-container button:hover { background: var(--vscode-button-hoverBackground); }
   </style>
 </head>
 <body>
   <h2>${escapeHtml(chatName)}</h2>
-  <div class="chat-container">
+  <div class="chat-container" id="chat-container">
     ${msgsHtml || '<div class="empty">Nenhuma mensagem</div>'}
   </div>
-  <div class="input-container">
-    <input type="text" id="msg-input" placeholder="Digite uma mensagem…" />
-    <button id="send-btn">Enviar</button>
+  <div class="input-wrapper">
+    <div class="input-container">
+      <input type="text" id="msg-input" placeholder="Digite uma mensagem…" autocomplete="off" />
+      <button id="send-btn">Enviar</button>
+    </div>
   </div>
   <script>
     const vscode = acquireVsCodeApi();
     const chatId = "${chatId}";
     const accountNickname = "${accountNickname}";
     
+    // Scroll para o final ao abrir
+    var container = document.getElementById('chat-container');
+    container.scrollTop = container.scrollHeight;
+
     document.getElementById('send-btn').addEventListener('click', sendMessage);
     document.getElementById('msg-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') sendMessage();
