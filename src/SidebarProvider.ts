@@ -497,12 +497,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         if (acct.status === 'ready' && acct.chats.length > 0) {
           body = '<div class="chat-list">' +
             acct.chats.slice(0, 20).map(function(chat) {
+              var muteIcon = chat.isMuted ? '<span title="Silenciado" style="font-size:11px;opacity:0.5;flex-shrink:0;">🔕</span>' : '';
               return '<div class="chat-item" data-action="openChat" data-chat-id="' + esc(chat.id) + '" data-chat-name="' + esc(chat.name) + '" data-account-nickname="' + esc(acct.nickname) + '">' +
                 '<div class="avatar">' + esc(initials(chat.name)) + '</div>' +
                 '<div class="chat-body">' +
                   '<div class="chat-name">' + esc(chat.name) + '</div>' +
                   (chat.lastMessage ? '<div class="chat-last">' + esc(chat.lastMessage) + '</div>' : '') +
                 '</div>' +
+                muteIcon +
                 (chat.unreadCount > 0 ? '<span class="badge">' + chat.unreadCount + '</span>' : '') +
               '</div>';
             }).join('') +

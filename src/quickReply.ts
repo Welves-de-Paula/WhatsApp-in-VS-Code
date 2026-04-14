@@ -420,11 +420,58 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       max-height: 140px;
       background: transparent;
     }
-    .media-audio {
-      display: block;
-      width: 240px;
-      max-width: 100%;
-      margin: 2px 0;
+    /* ---- Player de áudio customizado ---- */
+    .audio-player {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      min-width: 210px;
+      max-width: 260px;
+    }
+    .audio-play-btn {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      border: none;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      cursor: pointer;
+      font-size: 11px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .audio-play-btn:hover { background: var(--vscode-button-hoverBackground); }
+    .audio-progress-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .audio-bar-track {
+      width: 100%;
+      height: 4px;
+      background: rgba(128,128,128,0.3);
+      border-radius: 2px;
+      cursor: pointer;
+      position: relative;
+    }
+    .audio-bar-fill {
+      height: 100%;
+      background: var(--vscode-button-background);
+      border-radius: 2px;
+      width: 0%;
+      pointer-events: none;
+    }
+    .audio-time {
+      font-size: 10px;
+      opacity: 0.55;
+      letter-spacing: 0.3px;
+    }
+    .audio-icon {
+      font-size: 14px;
+      opacity: 0.6;
+      flex-shrink: 0;
     }
     .media-video {
       display: block;
@@ -444,6 +491,31 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       font-size: 11px;
       opacity: 0.5;
       font-style: italic;
+    }
+
+    /* ---- Contato (vCard) ---- */
+    .media-contact {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 2px;
+      min-width: 160px;
+    }
+    .contact-avatar {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: var(--vscode-button-secondaryBackground, #444);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .contact-info { display: flex; flex-direction: column; gap: 2px; }
+    .contact-name { font-size: 13px; font-weight: 600; }
+    .contact-phone { font-size: 11px; opacity: 0.65; }
+    .contact-divider {
+      border: none;
+      border-top: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
+      margin: 4px 0 2px;
     }
   </style>
 </head>
@@ -534,19 +606,141 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       container.appendChild(msgEl);
       container.scrollTop = container.scrollHeight;
     }
+
+    // ----------------------------------------------------------------
+    // Player de áudio customizado
+    // ----------------------------------------------------------------
+    const audioInstances = {}; // audioId → HTMLAudioElement
+
+    function getOrCreateAudio(player) {
+      const id = player.dataset.audioId;
+      if (!audioInstances[id]) {
+        const audio = new Audio(player.dataset.src);
+        audioInstances[id] = audio;
+
+        audio.addEventListener('loadedmetadata', function () {
+          player.querySelector('.audio-time').textContent =
+            '0:00 / ' + fmtTime(audio.duration);
+        });
+
+        audio.addEventListener('timeupdate', function () {
+          const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+          player.querySelector('.audio-bar-fill').style.width = pct + '%';
+          player.querySelector('.audio-time').textContent =
+            fmtTime(audio.currentTime) + ' / ' + fmtTime(audio.duration);
+        });
+
+        audio.addEventListener('ended', function () {
+          player.querySelector('.audio-play-btn').textContent = '▶';
+          player.querySelector('.audio-bar-fill').style.width = '0%';
+          player.querySelector('.audio-time').textContent =
+            '0:00 / ' + fmtTime(audio.duration);
+        });
+      }
+      return audioInstances[id];
+    }
+
+    function fmtTime(sec) {
+      if (!sec || isNaN(sec) || !isFinite(sec)) return '0:00';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return m + ':' + String(s).padStart(2, '0');
+    }
+
+    // Pausa todos os outros players
+    function pauseOthers(exceptId) {
+      Object.entries(audioInstances).forEach(function(entry) {
+        const id = entry[0], audio = entry[1];
+        if (id !== exceptId && !audio.paused) {
+          audio.pause();
+          const p = document.querySelector('.audio-player[data-audio-id="' + id + '"]');
+          if (p) p.querySelector('.audio-play-btn').textContent = '▶';
+        }
+      });
+    }
+
+    // Clique no botão play/pause
+    document.addEventListener('click', function (e) {
+      const btn = e.target.closest('.audio-play-btn');
+      if (!btn) return;
+      const player = btn.closest('.audio-player');
+      if (!player) return;
+
+      const id = player.dataset.audioId;
+      const audio = getOrCreateAudio(player);
+      pauseOthers(id);
+
+      if (audio.paused) {
+        audio.play();
+        btn.textContent = '⏸';
+      } else {
+        audio.pause();
+        btn.textContent = '▶';
+      }
+    });
+
+    // Clique na barra para seekar
+    document.addEventListener('click', function (e) {
+      const track = e.target.closest('.audio-bar-track');
+      if (!track) return;
+      const player = track.closest('.audio-player');
+      if (!player) return;
+
+      const audio = getOrCreateAudio(player);
+      if (!audio.duration) return;
+
+      const rect = track.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      audio.currentTime = ratio * audio.duration;
+    });
   </script>
 </body>
 </html>
   `;
 }
 
+/** Extrai nome e telefone de uma string vCard */
+function parseVCard(vcard: string): { name: string; phone: string } {
+  const name = vcard.match(/^FN:(.+)$/m)?.[1]?.trim() ?? 'Contato';
+  const phone = vcard.match(/^TEL[^:\r\n]*:(.+)$/m)?.[1]?.trim() ?? '';
+  return { name, phone };
+}
+
+function renderVCardHtml(vcard: string): string {
+  const { name, phone } = parseVCard(vcard);
+  return `
+    <div class="media-contact">
+      <div class="contact-avatar">👤</div>
+      <div class="contact-info">
+        <div class="contact-name">${escapeHtml(name)}</div>
+        ${phone ? `<div class="contact-phone">${escapeHtml(phone)}</div>` : ''}
+      </div>
+    </div>`;
+}
+
 function renderMediaContent(msg: MessageInfo): string {
+  const type = msg.mediaType ?? '';
+
+  // --- Contatos vCard ---
+  if (type === 'vcard') {
+    return renderVCardHtml(msg.body);
+  }
+
+  if (type === 'multi_vcard') {
+    let vcards: string[] = [];
+    try { vcards = JSON.parse(msg.body) as string[]; } catch { /* ignore */ }
+    if (vcards.length === 0) {
+      return `<span class="media-none">👤 Contatos</span>`;
+    }
+    return vcards
+      .map((vc, i) => `${i > 0 ? '<hr class="contact-divider">' : ''}${renderVCardHtml(vc)}`)
+      .join('');
+  }
+
   // Sem mídia — texto simples
   if (!msg.hasMedia) {
     return msg.body ? escapeHtml(msg.body) : '';
   }
-
-  const type = msg.mediaType ?? '';
 
   // Mídia baixada com sucesso
   if (msg.mediaData && msg.mediaMime) {
@@ -570,7 +764,19 @@ function renderMediaContent(msg: MessageInfo): string {
     }
 
     if (type === 'audio' || type === 'ptt') {
-      return `<audio class="media-audio" controls src="${src}"></audio>`;
+      const icon = type === 'ptt' ? '🎙️' : '🎵';
+      const safeId = escapeHtml(msg.id);
+      return `
+        <div class="audio-player" data-audio-id="${safeId}" data-src="${src}">
+          <button class="audio-play-btn" title="Reproduzir">▶</button>
+          <div class="audio-progress-wrap">
+            <div class="audio-bar-track" data-track>
+              <div class="audio-bar-fill"></div>
+            </div>
+            <span class="audio-time">0:00 / 0:00</span>
+          </div>
+          <span class="audio-icon">${icon}</span>
+        </div>`;
     }
 
     if (type === 'document') {

@@ -48,32 +48,57 @@ export class NotificationManager {
     const settings = this.accountManager.getNotificationSettings(nickname);
     this.output.appendLine(`  sound=${settings.sound}  filter=${settings.filter}  visual=${settings.visualAlert}`);
 
-    const isGroup   = msg.from.endsWith('@g.us');
-    const isDirect  = !isGroup;
+    const isGroup  = msg.from.endsWith('@g.us');
+    const isDirect = !isGroup;
+
     const notifyName: string | undefined =
       (msg._data as { notifyName?: string } | undefined)?.notifyName;
+
+    // sender = quem mandou a mensagem (nome do contato ou de quem falou no grupo)
     const sender = notifyName ?? msg.from.replace(/@[cg]\.us$/, '');
+
+    // chatName = nome do chat para fins de mute/exibição
+    // – direto  : mesmo que sender
+    // – grupo   : nome do grupo (buscado no cache de chats) — o sender é o membro,
+    //             não o grupo, então não serve para comparar com mutedGroups
+    const client = this.accountManager.getClient(nickname);
+    const chatName = isGroup
+      ? (client?.chats.find(c => c.id === msg.from)?.name ?? msg.from.replace(/@g\.us$/, ''))
+      : sender;
 
     // Filtro de tipo
     if (settings.filter === 'direct' && !isDirect) {
       this.output.appendLine('  → ignorado (filtro: somente diretos)');
       return;
     }
-    if (settings.filter === 'groups'  && !isGroup) {
+    if (settings.filter === 'groups' && !isGroup) {
       this.output.appendLine('  → ignorado (filtro: somente grupos)');
       return;
     }
 
-    // Contatos / grupos silenciados
+    // ── Silenciamento ──────────────────────────────────────────────────────────
+    // Regra 1 — mute configurado no próprio WhatsApp (isMuted no chat)
+    const chatInfo = client?.chats.find(c => c.id === msg.from);
+    if (chatInfo?.isMuted) {
+      this.output.appendLine(`  → silenciado pelo WhatsApp: ${chatName}`);
+      return;
+    }
+
+    // Regra 2 — mute manual configurado nas settings da extensão
+    //   • direto : compara pelo nome do contato  (sender)
+    //   • grupo  : compara pelo nome do grupo    (chatName)
+    // Em ambos os casos: sem som e sem banner, mas o contador de não-lidas e
+    // o badge continuam atualizando normalmente (fluxo chatsUpdate é separado).
     const muteList = isGroup ? (settings.mutedGroups ?? []) : (settings.mutedContacts ?? []);
-    if (muteList.some((m) => m.toLowerCase() === sender.toLowerCase())) {
-      this.output.appendLine(`  → ignorado (silenciado: ${sender})`);
+    const muteKey  = isGroup ? chatName : sender;
+    if (muteList.some(m => m.toLowerCase() === muteKey.toLowerCase())) {
+      this.output.appendLine(`  → silenciado nas settings: ${muteKey}`);
       return;
     }
 
     // Alerta visual
     const preview = msg.body.length > 60 ? `${msg.body.slice(0, 60)}…` : msg.body;
-    this.showVisualAlert(nickname, sender, preview, settings);
+    this.showVisualAlert(nickname, sender, msg.from, preview, settings);
 
     // Som
     this.playSound(settings);
@@ -86,22 +111,33 @@ export class NotificationManager {
   private showVisualAlert(
     nickname: string,
     sender: string,
+    chatId: string,
     preview: string,
     settings: AccountNotificationSettings,
   ): void {
     switch (settings.visualAlert) {
-      case 'banner':
+      case 'banner': {
+        // Tenta encontrar o nome do chat na lista em cache (útil para grupos)
+        const client = this.accountManager.getClient(nickname);
+        const chatName = client?.chats.find(c => c.id === chatId)?.name ?? sender;
+
         vscode.window
           .showInformationMessage(
             `📱 "${nickname}" — ${sender}: ${preview}`,
-            'Responder',
+            'Abrir chat',
           )
           .then((choice) => {
-            if (choice === 'Responder') {
-              void vscode.commands.executeCommand('whatsapp.quickReply');
+            if (choice === 'Abrir chat') {
+              void vscode.commands.executeCommand(
+                'whatsapp.openChat',
+                chatId,
+                chatName,
+                nickname,
+              );
             }
           });
         break;
+      }
 
       case 'statusBarFlash':
         this.flashStatusBar(nickname, sender, settings);

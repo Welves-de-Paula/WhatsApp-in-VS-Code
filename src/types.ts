@@ -49,9 +49,11 @@ export interface ChatInfo {
   timestamp: number;
   unreadCount: number;
   accountNickname: string;
+  /** true se o chat está silenciado no próprio WhatsApp */
+  isMuted?: boolean;
 }
 
-export type MediaType = 'image' | 'sticker' | 'audio' | 'ptt' | 'video' | 'gif' | 'document' | string;
+export type MediaType = 'image' | 'sticker' | 'audio' | 'ptt' | 'video' | 'gif' | 'document' | 'vcard' | 'multi_vcard' | string;
 
 export interface MessageInfo {
   id: string;

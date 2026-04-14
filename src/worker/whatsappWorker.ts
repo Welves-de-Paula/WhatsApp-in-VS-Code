@@ -31,6 +31,7 @@ interface SerializedChat {
   lastMessage: string;
   timestamp: number;
   unreadCount: number;
+  isMuted: boolean;
 }
 
 interface SerializedMessage {
@@ -233,13 +234,25 @@ async function loadChats(): Promise<void> {
     });
     const chats: SerializedChat[] = filteredChats.slice(0, 30).map(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (chat: any): SerializedChat => ({
-        id: chat.id._serialized as string,
-        name: chat.name as string,
-        lastMessage: (chat.lastMessage?.body as string | undefined) ?? '',
-        timestamp: (chat.lastMessage?.timestamp as number | undefined) ?? 0,
-        unreadCount: chat.unreadCount as number,
-      }),
+      (chat: any): SerializedChat => {
+        // isMuted — respeita o silenciamento configurado no próprio WhatsApp.
+        // muteExpiration: 0 = não silenciado, -1 = sempre, >0 = até timestamp (segundos)
+        const exp = (chat.muteExpiration as number | undefined) ?? 0;
+        const now = Math.floor(Date.now() / 1000);
+        const isMuted =
+          (chat.isMuted as boolean | undefined) === true ||
+          exp < 0 ||
+          exp > now;
+
+        return {
+          id: chat.id._serialized as string,
+          name: chat.name as string,
+          lastMessage: (chat.lastMessage?.body as string | undefined) ?? '',
+          timestamp: (chat.lastMessage?.timestamp as number | undefined) ?? 0,
+          unreadCount: chat.unreadCount as number,
+          isMuted,
+        };
+      },
     );
     send({ type: 'chatsUpdate', chats });
   } catch (err) {
@@ -361,8 +374,7 @@ process.on('message', (raw: unknown) => {
           const rawMessages: any[] = await chat.fetchMessages({ limit: 50 });
           log('info', `Mensagens obtidas: ${rawMessages.length}`);
 
-          // Baixa mídias em paralelo com Promise.allSettled para não travar
-          // se algum download falhar (imagem corrompida, timeout, etc.)
+          // Baixa mídias em paralelo; vcards são texto (sem download)
           const messages: SerializedMessage[] = await Promise.all(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             rawMessages.map(async (m: any): Promise<SerializedMessage> => {
@@ -376,9 +388,21 @@ process.on('message', (raw: unknown) => {
                   || '',
               };
 
-              if (m.hasMedia) {
+              const msgType = (m.type as string) || '';
+
+              // --- Contatos (vCard) ---
+              if (msgType === 'vcard') {
+                base.mediaType = 'vcard';
+                // body já contém a string vCard completa
+              } else if (msgType === 'multi_vcard') {
+                base.mediaType = 'multi_vcard';
+                // vCards é um array de strings; serializa como JSON no body
+                const vcards = (m.vCards as string[] | undefined) ?? [];
+                base.body = JSON.stringify(vcards);
+              // --- Mídias binárias ---
+              } else if (m.hasMedia) {
                 base.hasMedia = true;
-                base.mediaType = m.type as string;
+                base.mediaType = msgType;
                 try {
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   const media: any = await m.downloadMedia();
