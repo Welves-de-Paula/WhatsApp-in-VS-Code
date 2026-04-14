@@ -14,6 +14,7 @@ interface ChatPickItem extends vscode.QuickPickItem {
  */
 let activeChatPanel: vscode.WebviewPanel | undefined;
 let activeChatContext: { chatId: string; accountNickname: string } | undefined;
+let activeChatSyncTimer: ReturnType<typeof setInterval> | undefined;
 
 // ---------------------------------------------------------------------------
 // Public entry points
@@ -127,6 +128,10 @@ async function openChatPanel(
       { enableScripts: true, localResourceRoots: [extensionUri], retainContextWhenHidden: true },
     );
     activeChatPanel.onDidDispose(() => {
+      if (activeChatSyncTimer) {
+        clearInterval(activeChatSyncTimer);
+        activeChatSyncTimer = undefined;
+      }
       activeChatPanel = undefined;
       activeChatContext = undefined;
     });
@@ -148,10 +153,48 @@ async function openChatPanel(
     // Garante que o painel não foi fechado nem trocado durante o await
     if (activeChatPanel === panel && activeChatContext?.chatId === chatId) {
       panel.webview.html = generateChatHtml(panel.webview, messages, chatName, chatId, accountNickname);
+      startChatSync(accountManager, panel, chatId, accountNickname);
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     void vscode.window.showErrorMessage(`Erro ao carregar mensagens: ${message}`);
+  }
+}
+
+function startChatSync(
+  accountManager: AccountManager,
+  panel: vscode.WebviewPanel,
+  chatId: string,
+  accountNickname: string,
+): void {
+  if (activeChatSyncTimer) clearInterval(activeChatSyncTimer);
+  activeChatSyncTimer = setInterval(() => {
+    void refreshChatMessages(accountManager, panel, chatId, accountNickname);
+  }, 8000);
+}
+
+async function refreshChatMessages(
+  accountManager: AccountManager,
+  panel: vscode.WebviewPanel,
+  chatId: string,
+  accountNickname: string,
+): Promise<void> {
+  if (activeChatPanel !== panel) return;
+  if (activeChatContext?.chatId !== chatId || activeChatContext.accountNickname !== accountNickname) return;
+
+  const client = accountManager.getClient(accountNickname);
+  if (!client || client.status !== 'ready') return;
+
+  try {
+    const messages = await client.getChatMessages(chatId);
+    if (activeChatPanel !== panel) return;
+    if (activeChatContext?.chatId !== chatId || activeChatContext.accountNickname !== accountNickname) return;
+    void panel.webview.postMessage({
+      command: 'replaceMessages',
+      html: buildMessagesHtml(messages),
+    });
+  } catch {
+    // Evita ruído visual em reconexões momentâneas.
   }
 }
 
@@ -551,6 +594,15 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
 
     window.addEventListener('message', (event) => {
       const data = event.data || {};
+      if (data.command === 'replaceMessages') {
+        const wasNearBottom =
+          container.scrollHeight - container.scrollTop - container.clientHeight < 60;
+        container.innerHTML = data.html || '<div class="empty">Nenhuma mensagem</div>';
+        if (wasNearBottom) {
+          container.scrollTop = container.scrollHeight;
+        }
+        return;
+      }
       if (data.command !== 'messageSent') return;
 
       isSending = false;
@@ -708,6 +760,24 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
 </body>
 </html>
   `;
+}
+
+function buildMessagesHtml(messages: MessageInfo[]): string {
+  return messages.map((msg) => {
+    const time = new Date(msg.timestamp * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const fromMeClass = msg.fromMe ? 'from-me' : 'from-them';
+    const senderLabel = msg.fromMe ? 'VocÃª' : msg.sender;
+
+    return `
+      <div class="message ${fromMeClass}">
+        <div class="message-content">${renderMediaContent(msg)}</div>
+        <div class="message-meta">
+          <span class="sender">${escapeHtml(senderLabel)}</span>
+          <span class="time">${time}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 /** Extrai nome e telefone de uma string vCard */
