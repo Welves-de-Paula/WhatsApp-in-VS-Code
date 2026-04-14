@@ -2,6 +2,14 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import { ChildProcess, fork } from 'child_process';
 import { AccountStatus, ChatInfo, MessageInfo } from './types';
+import {
+  isWsl,
+  isWindowsPathAccessible,
+  getTempSessionPath,
+  getStoragePath,
+  copySessionFromWindowsToTemp,
+  copySessionFromTempToWindows,
+} from './storage';
 
 // ---- IPC types (espelhadas do worker) ----
 
@@ -62,19 +70,25 @@ export class WhatsAppClient extends EventEmitter {
     (result: { success: boolean; messages?: MessageInfo[]; error?: string }) => void
   > = new Map();
 
-  constructor(nickname: string, storagePath: string) {
+constructor(nickname: string, storagePath: string) {
     super();
     this.nickname = nickname;
-    this.storagePath = storagePath;
+    this.storagePath = isWsl() && isWindowsPathAccessible()
+      ? getTempSessionPath(nickname)
+      : storagePath;
   }
 
   // -------------------------------------------------------------------------
   // Public API
   // -------------------------------------------------------------------------
 
-  async initialize(): Promise<void> {
+async initialize(): Promise<void> {
     if (this.worker !== null || this.isInitializing) return;
     this.isInitializing = true;
+
+    if (isWsl() && isWindowsPathAccessible()) {
+      await copySessionFromWindowsToTemp(this.nickname);
+    }
 
     try {
       // O worker compilado fica em out/worker/whatsappWorker.js
@@ -175,12 +189,15 @@ export class WhatsAppClient extends EventEmitter {
     });
   }
 
-  async destroy(): Promise<void> {
+async destroy(): Promise<void> {
+    if (isWsl() && isWindowsPathAccessible()) {
+      void copySessionFromTempToWindows(this.nickname);
+    }
+
     if (!this.worker) return;
 
     this.sendToWorker({ type: 'destroy' });
 
-    // Aguarda o processo encerrar (máx. 8 s) antes de forçar kill
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         console.warn(`[WA Worker "${this.nickname}"] forçando encerramento.`);

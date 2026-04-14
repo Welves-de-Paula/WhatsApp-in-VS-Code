@@ -5,8 +5,8 @@ import { EventEmitter } from 'events';
 import { WhatsAppClient, WWebMessage } from './WhatsAppClient';
 import { QRCodePanel } from './QRCodePanel';
 import { AccountMeta, AccountNotificationSettings, AccountStatus, DEFAULT_NOTIFICATION_SETTINGS } from './types';
+import { getStoragePath, getAccountsFilePath, ensureStorageExists } from './storage';
 
-const GLOBAL_STATE_KEY = 'whatsapp.accounts';
 const NOTIF_SETTINGS_PREFIX = 'whatsapp.notif.';
 
 // ---------------------------------------------------------------------------
@@ -28,12 +28,14 @@ export class AccountManager extends EventEmitter {
   private readonly qrPanels: Map<string, QRCodePanel> = new Map();
   private readonly storagePath: string;
 
-  constructor(
+constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly extensionUri: vscode.Uri,
   ) {
     super();
-    this.storagePath = context.globalStorageUri.fsPath;
+    this.storagePath = getStoragePath();
+    ensureStorageExists();
+    this.setupAccountsFileWatcher();
   }
 
   // -------------------------------------------------------------------------
@@ -201,15 +203,84 @@ export class AccountManager extends EventEmitter {
     }
   }
 
+private setupAccountsFileWatcher(): void {
+    ensureStorageExists();
+    const accountsFilePath = getAccountsFilePath();
+
+    let watcher: fs.FSWatcher | null = null;
+
+    const startWatcher = (): void => {
+      if (watcher) return;
+      try {
+        watcher = fs.watch(accountsFilePath, (eventType) => {
+          if (eventType === 'change') {
+            setTimeout(() => this.reloadAccountsFromFile(), 100);
+          }
+        });
+      } catch {
+        // silent fail if watcher fails
+      }
+    };
+
+    startWatcher();
+  }
+
+  private reloadAccountsFromFile(): void {
+    try {
+      const accountsFilePath = getAccountsFilePath();
+      if (!fs.existsSync(accountsFilePath)) return;
+
+      const data = fs.readFileSync(accountsFilePath, 'utf-8');
+      const saved: AccountMeta[] = JSON.parse(data);
+
+      const currentNicknames = new Set([...this.clients.keys()].map((n) => n));
+      const savedNicknames = new Set(saved.map((m) => m.nickname));
+
+      for (const nickname of currentNicknames) {
+        if (!savedNicknames.has(nickname)) {
+          this.clients.get(nickname)?.destroy();
+          this.clients.delete(nickname);
+          this.qrPanels.get(nickname)?.close();
+          this.qrPanels.delete(nickname);
+        }
+      }
+
+      for (const meta of saved) {
+        if (!this.clients.has(meta.nickname)) {
+          this.createAndRegisterClient(meta.nickname, false).catch((err: unknown) =>
+            console.error(
+              `[AccountManager] Erro ao carregar conta "${meta.nickname}":`,
+              (err as Error).message,
+            ),
+          );
+        }
+      }
+
+      this.emit('listChanged');
+    } catch {
+      // silent fail on reload errors
+    }
+  }
+
   private saveAccounts(): void {
+    ensureStorageExists();
+    const accountsFilePath = getAccountsFilePath();
     const metas: AccountMeta[] = [...this.clients.keys()].map((n) => ({
       nickname: n,
     }));
-    void this.context.globalState.update(GLOBAL_STATE_KEY, metas);
+    fs.writeFileSync(accountsFilePath, JSON.stringify(metas, null, 2), 'utf-8');
   }
 
   private loadSavedAccounts(): AccountMeta[] {
-    return this.context.globalState.get<AccountMeta[]>(GLOBAL_STATE_KEY, []);
+    try {
+      const accountsFilePath = getAccountsFilePath();
+      if (!fs.existsSync(accountsFilePath)) return [];
+
+      const data = fs.readFileSync(accountsFilePath, 'utf-8');
+      return JSON.parse(data) as AccountMeta[];
+    } catch {
+      return [];
+    }
   }
 
   /**
