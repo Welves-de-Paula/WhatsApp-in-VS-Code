@@ -16,6 +16,9 @@ export class NotificationManager {
 
     // Toast para mensagens recebidas e atualização do badge
     accountManager.on('message', (nickname, msg) => {
+      // Ignorar notificações de canais
+      if (msg.from.includes('@broadcast')) return;
+      
       const notifyName: string | undefined = (msg._data as { notifyName?: string } | undefined)?.notifyName;
       const sender = notifyName ?? msg.from.replace(/@[cg]\.us$/, '');
       const preview = msg.body.length > 60 ? `${msg.body.slice(0, 60)}…` : msg.body;

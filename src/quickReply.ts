@@ -130,9 +130,8 @@ function generateChatHtml(messages: MessageInfo[], chatName: string): string {
   <style>
     body { font-family: var(--vscode-font-family); padding: 10px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); }
     h2 { margin: 0 0 10px 0; font-size: 16px; }
-    .message { margin: 8px 0; padding: 8px 12px; border-radius: 8px; max-width: 70%; }
-    .from-me { background: #d9fdd3; margin-left: auto; }
-    .from-them { background: var(--vscode-input-background); }
+    .message { margin: 8px 0; padding: 8px 12px; border-radius: 4px; max-width: 70%; border: 1px solid var(--vscode-focusBorder); }
+    .from-me { margin-left: auto; }
     .message-content { word-wrap: break-word; }
     .message-meta { font-size: 11px; opacity: 0.7; margin-top: 4px; display: flex; justify-content: space-between; }
     .sender { font-weight: bold; }
