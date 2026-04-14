@@ -37,13 +37,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // ------------------------------------------------------------------
   context.subscriptions.push(
     vscode.commands.registerCommand('whatsapp.quickReply', () => {
-      void executeQuickReply(accountManager!);
+      void executeQuickReply(accountManager!, context.extensionUri);
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('whatsapp.openChat', (chatId: string, chatName: string, accountNickname: string) => {
-      void executeOpenChat(accountManager!, chatId, chatName, accountNickname);
+      void executeOpenChat(accountManager!, chatId, chatName, accountNickname, context.extensionUri);
     }),
   );
 

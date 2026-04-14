@@ -11,13 +11,13 @@ type WorkerToHostMsg =
   | { type: 'statusChange'; status: AccountStatus }
   | { type: 'chatsUpdate'; chats: Omit<ChatInfo, 'accountNickname'>[] }
   | { type: 'message'; from: string; body: string; notifyName?: string }
-  | { type: 'sendResult'; success: boolean; error?: string }
+  | { type: 'sendResult'; requestId: string; success: boolean; messages?: MessageInfo[]; error?: string }
   | { type: 'log'; level: 'info' | 'error'; message: string };
 
 type HostToWorkerMsg =
   | { type: 'initialize'; storagePath: string; sessionId: string }
-  | { type: 'sendMessage'; chatId: string; text: string }
-  | { type: 'getMessages'; chatId: string }
+  | { type: 'sendMessage'; requestId: string; chatId: string; text: string }
+  | { type: 'getMessages'; requestId: string; chatId: string }
   | { type: 'destroy' };
 
 // ---------------------------------------------------------------------------
@@ -52,11 +52,15 @@ export class WhatsAppClient extends EventEmitter {
   private readonly storagePath: string;
   private worker: ChildProcess | null = null;
   private isInitializing = false;
+  private nextRequestId = 0;
+  private reconnectAttempts = 0;
+  private static readonly MAX_RECONNECT_ATTEMPTS = 3;
 
-  /** FIFO de resolvers aguardando resposta de sendMessage */
-  private sendResultHandlers: Array<
-    (result: { success: boolean; error?: string }) => void
-  > = [];
+  /** Mapa requestId → resolver aguardando resposta do worker */
+  private pendingRequests: Map<
+    string,
+    (result: { success: boolean; messages?: MessageInfo[]; error?: string }) => void
+  > = new Map();
 
   constructor(nickname: string, storagePath: string) {
     super();
@@ -96,7 +100,7 @@ export class WhatsAppClient extends EventEmitter {
       this.worker.on('error', (err) => {
         console.error(`[WA Worker "${this.nickname}"] erro:`, err);
         this.worker = null;
-        this.isInitializing = false;
+        this.isInitializing = false;  // worker não pôde iniciar
         this.setStatus('error');
       });
 
@@ -104,17 +108,27 @@ export class WhatsAppClient extends EventEmitter {
         console.log(
           `[WA Worker "${this.nickname}"] encerrado — código: ${code} sinal: ${signal}`,
         );
+        const wasReady = this.status === 'ready';
         this.worker = null;
         this.isInitializing = false;
-        // Rejeitar qualquer sendMessage pendente
-        const pending = this.sendResultHandlers.splice(0);
+        // Rejeitar todas as requisições pendentes
+        const pending = [...this.pendingRequests.values()];
+        this.pendingRequests.clear();
         pending.forEach((h) =>
           h({ success: false, error: 'Worker encerrado inesperadamente.' }),
         );
-        if (this.status !== 'ready') {
-          this.setStatus('error');
-        } else {
-          this.setStatus('disconnected');
+        this.setStatus(wasReady ? 'disconnected' : 'error');
+
+        // Reconecta automaticamente se estava conectado e ainda há tentativas
+        if (wasReady && this.reconnectAttempts < WhatsAppClient.MAX_RECONNECT_ATTEMPTS) {
+          this.reconnectAttempts++;
+          const delay = this.reconnectAttempts * 5000;
+          console.log(
+            `[WA Worker "${this.nickname}"] reconectando em ${delay / 1000}s (tentativa ${this.reconnectAttempts}/${WhatsAppClient.MAX_RECONNECT_ATTEMPTS})…`,
+          );
+          setTimeout(() => {
+            void this.initialize();
+          }, delay);
         }
       });
 
@@ -124,8 +138,10 @@ export class WhatsAppClient extends EventEmitter {
         storagePath: this.storagePath,
         sessionId: this.nickname,
       });
-    } finally {
+      // isInitializing permanece true até o worker reportar 'ready' ou 'error'
+    } catch (err) {
       this.isInitializing = false;
+      throw err;
     }
   }
 
@@ -134,13 +150,13 @@ export class WhatsAppClient extends EventEmitter {
       throw new Error(`Conta "${this.nickname}" não está conectada.`);
     }
 
+    const requestId = String(this.nextRequestId++);
     return new Promise((resolve, reject) => {
-      const handler = (result: { success: boolean; error?: string }) => {
+      this.pendingRequests.set(requestId, (result) => {
         if (result.success) resolve();
         else reject(new Error(result.error ?? 'Falha ao enviar mensagem.'));
-      };
-      this.sendResultHandlers.push(handler);
-      this.sendToWorker({ type: 'sendMessage', chatId, text });
+      });
+      this.sendToWorker({ type: 'sendMessage', requestId, chatId, text });
     });
   }
 
@@ -149,13 +165,13 @@ export class WhatsAppClient extends EventEmitter {
       throw new Error(`Conta "${this.nickname}" não está conectada.`);
     }
 
+    const requestId = String(this.nextRequestId++);
     return new Promise((resolve, reject) => {
-      const handler = (result: { success: boolean; messages?: MessageInfo[]; error?: string }) => {
+      this.pendingRequests.set(requestId, (result) => {
         if (result.success && result.messages) resolve(result.messages);
         else reject(new Error(result.error ?? 'Falha ao carregar mensagens.'));
-      };
-      this.sendResultHandlers.push(handler);
-      this.sendToWorker({ type: 'getMessages', chatId });
+      });
+      this.sendToWorker({ type: 'getMessages', requestId, chatId });
     });
   }
 
@@ -201,6 +217,13 @@ export class WhatsAppClient extends EventEmitter {
         break;
 
       case 'statusChange':
+        // Worker chegou a um estado terminal de inicialização
+        if (msg.status === 'ready' || msg.status === 'error' || msg.status === 'disconnected') {
+          this.isInitializing = false;
+        }
+        if (msg.status === 'ready') {
+          this.reconnectAttempts = 0;
+        }
         this.setStatus(msg.status);
         break;
 
@@ -217,14 +240,17 @@ export class WhatsAppClient extends EventEmitter {
           from: msg.from,
           body: msg.body,
           fromMe: false,
-          timestamp: Date.now(),
+          timestamp: Math.floor(Date.now() / 1000),  // segundos Unix, consistente com WWebMessage
           _data: { notifyName: msg.notifyName },
         } as WWebMessage);
         break;
 
       case 'sendResult': {
-        const handler = this.sendResultHandlers.shift();
-        handler?.(msg);
+        const handler = this.pendingRequests.get(msg.requestId);
+        if (handler) {
+          this.pendingRequests.delete(msg.requestId);
+          handler(msg);
+        }
         break;
       }
 

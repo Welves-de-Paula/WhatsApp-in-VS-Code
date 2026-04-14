@@ -137,13 +137,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleRemoveAccount(nickname: string): Promise<void> {
-    const choice = await vscode.window.showWarningMessage(
-      `Remover conta "${nickname}"? Isso apagará a sessão salva.`,
-      { modal: true },
-      'Remover',
-    );
-    if (choice === 'Remover') {
-      await this.accountManager.removeAccount(nickname);
+    try {
+      const choice = await vscode.window.showWarningMessage(
+        `Remover conta "${nickname}"? Isso apagará a sessão salva.`,
+        { modal: true },
+        'Remover',
+      );
+      if (choice === 'Remover') {
+        await this.accountManager.removeAccount(nickname);
+      }
+    } catch (err: unknown) {
+      void vscode.window.showErrorMessage(
+        `Erro ao remover conta: ${(err as Error).message}`,
+      );
     }
   }
 

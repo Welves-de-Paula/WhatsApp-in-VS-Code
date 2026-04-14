@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { AccountManager } from './AccountManager';
 import { ChatInfo, MessageInfo } from './types';
 
@@ -12,6 +13,7 @@ let currentChatInfo: { chatId: string; chatName: string; accountNickname: string
 
 export async function executeQuickReply(
   accountManager: AccountManager,
+  extensionUri: vscode.Uri,
 ): Promise<void> {
   const readyClients = accountManager.getClients().filter((c) => c.status === 'ready');
 
@@ -66,7 +68,7 @@ export async function executeQuickReply(
   if (!action) return;
 
   if (action.label.includes('Ver')) {
-    await showChatMessages(accountManager, selected.chatId, selected.accountNickname, selected.label);
+    await showChatMessages(accountManager, selected.chatId, selected.accountNickname, selected.label, extensionUri);
   } else {
     await sendReply(accountManager, selected.chatId, selected.accountNickname, selected.label, selected.description);
   }
@@ -77,6 +79,7 @@ async function showChatMessages(
   chatId: string,
   accountNickname: string,
   chatName: string,
+  extensionUri: vscode.Uri,
 ): Promise<void> {
   const client = accountManager.getClient(accountNickname);
   if (!client) {
@@ -86,7 +89,7 @@ async function showChatMessages(
 
   try {
     const messages = await client.getChatMessages(chatId);
-    
+
     if (messages.length === 0) {
       void vscode.window.showInformationMessage('Nenhuma mensagem nesta conversa.');
       return;
@@ -96,12 +99,11 @@ async function showChatMessages(
       `chat-${chatId}`,
       `${chatName} - WhatsApp`,
       vscode.ViewColumn.One,
-      { enableScripts: true },
+      { enableScripts: true, localResourceRoots: [extensionUri] },
     );
     registerChatWebviewHandler(panel, accountManager, { accountNickname, chatId });
 
-    const html = generateChatHtml(messages, chatName, chatId, accountNickname);
-    panel.webview.html = html;
+    panel.webview.html = generateChatHtml(panel.webview, messages, chatName, chatId, accountNickname);
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -109,7 +111,14 @@ async function showChatMessages(
   }
 }
 
-function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: string, accountNickname: string): string {
+function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chatName: string, chatId: string, accountNickname: string): string {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const csp = [
+    `default-src 'none'`,
+    `style-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}'`,
+  ].join('; ');
+
   const msgsHtml = messages.map((msg) => {
     const time = new Date(msg.timestamp * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const fromMeClass = msg.fromMe ? 'from-me' : 'from-them';
@@ -126,12 +135,15 @@ function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: str
     `;
   }).join('');
 
+  void webview;
+
   return `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <style>
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
+  <style nonce="${nonce}">
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: var(--vscode-font-family);
@@ -248,7 +260,7 @@ function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: str
     </div>
     <div id="send-error" class="send-error"></div>
   </div>
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const currentChatId = document.body.dataset.chatId || '';
     void document.body.dataset.accountNickname;
@@ -315,7 +327,7 @@ function generateChatHtml(messages: MessageInfo[], chatName: string, chatId: str
 
       const senderEl = document.createElement('span');
       senderEl.className = 'sender';
-      senderEl.textContent = 'VocÃª';
+      senderEl.textContent = 'Você';
 
       const timeEl = document.createElement('span');
       timeEl.className = 'time';
@@ -357,7 +369,7 @@ async function sendReply(
     prompt: `Responder para ${chatName} (${chatDescription?.trim()})`,
     placeHolder: 'Digite sua mensagem…',
     validateInput: (value) =>
-      value.trim() ? null : 'A mensagem não pode estar estar em branco.',
+      value.trim() ? null : 'A mensagem não pode estar em branco.',
   });
 
   if (!text?.trim()) return;
@@ -383,6 +395,7 @@ export async function executeOpenChat(
   chatId: string,
   chatName: string,
   accountNickname: string,
+  extensionUri: vscode.Uri,
 ): Promise<void> {
   const client = accountManager.getClient(accountNickname);
   if (!client) {
@@ -404,7 +417,7 @@ export async function executeOpenChat(
       'whatsappChat',
       'WhatsApp Chat',
       vscode.ViewColumn.One,
-      { enableScripts: true },
+      { enableScripts: true, localResourceRoots: [extensionUri] },
     );
     registerChatWebviewHandler(chatPanel, accountManager);
     chatPanel.onDidDispose(() => {
@@ -424,7 +437,7 @@ export async function executeOpenChat(
 
     // O painel pode ter sido fechado durante o await
     if (chatPanel !== panel) return;
-    panel.webview.html = generateChatHtml(messages, chatName, chatId, accountNickname);
+    panel.webview.html = generateChatHtml(panel.webview, messages, chatName, chatId, accountNickname);
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -465,7 +478,7 @@ function registerChatWebviewHandler(
       void panel.webview.postMessage({
         command: 'messageSent',
         success: false,
-        error: 'Chat ou mensagem invÃ¡lida.',
+        error: 'Chat ou mensagem inválida.',
       });
       return;
     }
@@ -485,7 +498,7 @@ function registerChatWebviewHandler(
       void panel.webview.postMessage({
         command: 'messageSent',
         success: false,
-        error: 'Conta nÃ£o encontrada para esta conversa.',
+        error: 'Conta não encontrada para esta conversa.',
       });
       return;
     }

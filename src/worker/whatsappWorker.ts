@@ -12,8 +12,8 @@ import * as path from 'path';
 
 type HostToWorkerMsg =
   | { type: 'initialize'; storagePath: string; sessionId: string }
-  | { type: 'sendMessage'; chatId: string; text: string }
-  | { type: 'getMessages'; chatId: string }
+  | { type: 'sendMessage'; requestId: string; chatId: string; text: string }
+  | { type: 'getMessages'; requestId: string; chatId: string }
   | { type: 'destroy' };
 
 type WorkerToHostMsg =
@@ -22,7 +22,7 @@ type WorkerToHostMsg =
   | { type: 'statusChange'; status: string }
   | { type: 'chatsUpdate'; chats: SerializedChat[] }
   | { type: 'message'; from: string; body: string; notifyName?: string }
-  | { type: 'sendResult'; success: boolean; messages?: SerializedMessage[]; error?: string }
+  | { type: 'sendResult'; requestId: string; success: boolean; messages?: SerializedMessage[]; error?: string }
   | { type: 'log'; level: 'info' | 'error'; message: string };
 
 interface SerializedChat {
@@ -75,6 +75,52 @@ function findSystemChrome(): string | undefined {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any = null;
+const recentIncomingMessageIds: string[] = [];
+
+/** Debounce para evitar chamadas duplas de loadChats (message + message_create) */
+let loadChatsTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleLoadChats(): void {
+  if (loadChatsTimer) clearTimeout(loadChatsTimer);
+  loadChatsTimer = setTimeout(() => {
+    loadChatsTimer = null;
+    loadChats().catch(() => {});
+  }, 300);
+}
+
+function markIncomingMessageSeen(id: string): boolean {
+  if (!id) return false;
+  if (recentIncomingMessageIds.includes(id)) return true;
+  recentIncomingMessageIds.push(id);
+  if (recentIncomingMessageIds.length > 200) {
+    recentIncomingMessageIds.splice(0, recentIncomingMessageIds.length - 200);
+  }
+  return false;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function forwardIncomingMessage(msg: any): void {
+  try {
+    const rawId = msg?.id?._serialized ?? msg?.id?.id ?? msg?.id ?? '';
+    const id = String(rawId);
+    if (markIncomingMessageSeen(id)) return;
+
+    const fromMe = Boolean(msg?.fromMe ?? msg?._data?.fromMe ?? msg?.id?.fromMe);
+    if (fromMe) return;
+
+    const from = String(msg?.from ?? '');
+    if (!from || from.includes('@broadcast')) return;
+
+    const body = String(msg?.body ?? '');
+    send({
+      type: 'message',
+      from,
+      body,
+      notifyName: (msg?._data as { notifyName?: string } | undefined)?.notifyName,
+    });
+  } catch (err) {
+    log('error', `forwardIncomingMessage: ${(err as Error).message}`);
+  }
+}
 
 async function initialize(
   storagePath: string,
@@ -147,16 +193,18 @@ async function initialize(
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  client.on('message', async (msg: any) => {
-    if (!msg.fromMe) {
-      send({
-        type: 'message',
-        from: msg.from as string,
-        body: msg.body as string,
-        notifyName: (msg._data as { notifyName?: string } | undefined)?.notifyName,
-      });
-    }
-    await loadChats();
+  client.on('message', (msg: any) => {
+    forwardIncomingMessage(msg);
+    scheduleLoadChats();
+  });
+
+  // Em algumas versões/sessões multi-device o evento 'message' pode falhar.
+  // Escutamos também 'message_create' e deduplicamos por id.
+  // O scheduleLoadChats evita chamadas duplas quando ambos disparam juntos.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client.on('message_create', (msg: any) => {
+    forwardIncomingMessage(msg);
+    scheduleLoadChats();
   });
 
   await client.initialize();
@@ -210,6 +258,7 @@ process.on('message', (raw: unknown) => {
       if (!client) {
         send({
           type: 'sendResult',
+          requestId: msg.requestId,
           success: false,
           error: 'Cliente não conectado.',
         });
@@ -219,10 +268,11 @@ process.on('message', (raw: unknown) => {
         try {
           await client.sendMessage(msg.chatId, msg.text);
           await loadChats();
-          send({ type: 'sendResult', success: true });
+          send({ type: 'sendResult', requestId: msg.requestId, success: true });
         } catch (err) {
           send({
             type: 'sendResult',
+            requestId: msg.requestId,
             success: false,
             error: (err as Error).message,
           });
@@ -234,6 +284,7 @@ process.on('message', (raw: unknown) => {
       if (!client) {
         send({
           type: 'sendResult',
+          requestId: msg.requestId,
           success: false,
           error: 'Cliente não conectado.',
         });
@@ -241,102 +292,32 @@ process.on('message', (raw: unknown) => {
       }
       (async () => {
         try {
-          if (!client) {
-            throw new Error('Cliente não está pronto');
+          // getChatById retorna um objeto "leve" que pode falhar em fetchMessages.
+          // Buscar via getChats() garante que o chat está totalmente inicializado
+          // no contexto interno do WhatsApp Web.
+          log('info', `Buscando mensagens do chat: ${msg.chatId}`);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const allChats: any[] = await client.getChats();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const chat = allChats.find((c: any) => c.id._serialized === msg.chatId);
+          if (!chat) {
+            throw new Error('Chat não encontrado.');
           }
-
-          // Tenta primeiro pelo método do cliente
-          try {
-            log('info', `getChatById para: ${msg.chatId}`);
-            const chat = await client.getChatById(msg.chatId);
-            log('info', `Chat obtido: ${chat?.name}, buscando mensagens...`);
-            const rawMessages = await chat.fetchMessages({ limit: 50 });
-            log('info', `Mensagens obtidas: ${rawMessages.length}`);
-            const messages = rawMessages.map((m: any) => ({
-              id: m.id._serialized,
-              body: m.body || '',
-              fromMe: m.fromMe,
-              timestamp: m.timestamp,
-              sender: m._data?.notifyName || m.from?.replace(/@[cg]\.us$/, '')
-            }));
-            send({ type: 'sendResult', success: true, messages });
-            return;
-          } catch (innerErr) {
-            const errMsg = (innerErr as Error).message || String(innerErr);
-            log('info', `Método padrão falhou: ${errMsg}, tentando via Puppeteer`);
-          }
-
-          // Fallback: tenta acessar via Puppeteer - método simplificado
-          // @ts-ignore
-          const page = client.page || (client as any).pupPage;
-          if (!page) {
-            throw new Error('Navegador não disponível');
-          }
-
-          // Vai para o chat primeiro e espera carregar
-          await page.goto(`https://web.whatsapp.com/app?chat=${msg.chatId}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
-          await new Promise(r => setTimeout(r, 5000));
-
-          const messages = await page.evaluate((cid: string) => {
-            const result: any[] = [];
-            try {
-              // Tenta obter mensagens da UI do WhatsApp
-              const messageElements = document.querySelectorAll('[data-message-id], .message-[class*="message"]');
-              
-              messageElements.forEach((el: any) => {
-                try {
-                  const msgId = el.getAttribute('data-message-id') || Math.random().toString();
-                  const bodyEl = el.querySelector('.selectable-text span, [role="button"] span[dir]');
-                  const body = bodyEl ? bodyEl.innerText?.trim() : '';
-                  
-                  if (body) {
-                    const fromMe = el.classList.contains('message-out') || el.classList.contains('out');
-                    const timeEl = el.querySelector('[data-pre-plain-text], .copyable-text span');
-                    let timestamp = Date.now() / 1000;
-                    
-                    result.push({
-                      id: msgId,
-                      body: body,
-                      fromMe: fromMe,
-                      timestamp: timestamp,
-                      sender: ''
-                    });
-                  }
-                } catch(e) {}
-              });
-              
-              // Se ainda não achou, tenta via Store
-              if (result.length === 0) {
-                try {
-                  // @ts-ignore
-                  const w = window as any;
-                  const chat = w.Store?.Chat?.get?.(cid) || w.Store?.Chat?.getById?.(cid);
-                  if (chat && chat.msgs) {
-                    const msgs = chat.msgs._models || chat.msgs.models || [];
-                    msgs.slice(-50).forEach((m: any) => {
-                      if (m && m.id && m.body) {
-                        result.push({
-                          id: m.id._serialized || m.id,
-                          body: m.body || '',
-                          fromMe: m.isMe || m.fromMe || false,
-                          timestamp: m.t || m.timestamp || 0,
-                          sender: m._data?.notifyName || ''
-                        });
-                      }
-                    });
-                  }
-                } catch(e) {}
-              }
-            } catch (e) {}
-            return result;
-          }, msg.chatId);
-
-          log('info', `Mensagens via Puppeteer: ${messages.length}`);
-
-          send({ type: 'sendResult', success: true, messages });
+          const rawMessages = await chat.fetchMessages({ limit: 50 });
+          log('info', `Mensagens obtidas: ${rawMessages.length}`);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const messages = rawMessages.map((m: any) => ({
+            id: m.id._serialized as string,
+            body: (m.body as string) || '',
+            fromMe: m.fromMe as boolean,
+            timestamp: m.timestamp as number,
+            sender: (m._data?.notifyName as string | undefined) || (m.from as string | undefined)?.replace(/@[cg]\.us$/, '') || '',
+          }));
+          send({ type: 'sendResult', requestId: msg.requestId, success: true, messages });
         } catch (err) {
           send({
             type: 'sendResult',
+            requestId: msg.requestId,
             success: false,
             error: (err as Error).message,
           });
