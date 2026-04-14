@@ -1,6 +1,6 @@
 {
-  "name": "whatsapp-multi",
-  "displayName": "WhatsApp Multi",
+  "name": "whatsapp-vscode",
+  "displayName": "WhatsApp VSCode",
   "description": "Gerencie contas do WhatsApp direto no VS Code com notificações e quick reply",
   "version": "0.1.0",
   "publisher": "local",
@@ -11,7 +11,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:whatsappMulti.sidebar",
+    "onView:whatsappVsCode.sidebar",
     "onCommand:whatsapp.quickReply",
     "onCommand:whatsapp.addAccount",
     "onCommand:whatsapp.removeAccount",
@@ -54,18 +54,18 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "whatsapp-multi",
-          "title": "WhatsApp Multi",
+          "id": "whatsapp-vscode",
+          "title": "WhatsApp",
           "icon": "media/whatsapp.svg"
         }
       ]
     },
     "views": {
-      "whatsapp-multi": [
+      "whatsapp-vscode": [
         {
           "type": "webview",
-          "id": "whatsappMulti.sidebar",
-          "name": "WhatsApp Multi"
+          "id": "whatsappVsCode.sidebar",
+          "name": "WhatsApp"
         }
       ]
     }

@@ -73,7 +73,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
-      'whatsappMulti.sidebar',
+      'whatsappVsCode.sidebar',
       sidebarProvider,
       { webviewOptions: { retainContextWhenHidden: true } },
     ),
@@ -173,11 +173,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   if (isOwner) {
     accountManager.initializeAll().catch((err: unknown) =>
-      console.error('[WhatsApp Multi] Erro ao reconectar contas salvas:', (err as Error).message),
+      console.error('[WhatsApp] Erro ao reconectar contas salvas:', (err as Error).message),
     );
   } else {
     void vscode.window.showInformationMessage(
-      'WhatsApp Multi: já está ativo em outra janela do VS Code. ' +
+      'WhatsApp: já está ativo em outra janela do VS Code. ' +
       'Os workers não foram iniciados aqui para evitar conflitos de sessão.',
     );
   }

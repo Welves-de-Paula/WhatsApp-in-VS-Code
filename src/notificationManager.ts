@@ -24,7 +24,7 @@ export class NotificationManager {
       100,
     );
     this.statusBarItem.command = 'whatsapp.quickReply';
-    this.statusBarItem.tooltip = 'WhatsApp Multi — Clique para Quick Reply';
+    this.statusBarItem.tooltip = 'WhatsApp — Clique para Quick Reply';
     this.updateBadge();
     this.statusBarItem.show();
 
@@ -48,7 +48,7 @@ export class NotificationManager {
     const settings = this.accountManager.getNotificationSettings(nickname);
     this.output.appendLine(`  sound=${settings.sound}  filter=${settings.filter}  visual=${settings.visualAlert}`);
 
-    const isGroup  = msg.from.endsWith('@g.us');
+    const isGroup = msg.from.endsWith('@g.us');
     const isDirect = !isGroup;
 
     const notifyName: string | undefined =
@@ -90,7 +90,7 @@ export class NotificationManager {
     // Em ambos os casos: sem som e sem banner, mas o contador de não-lidas e
     // o badge continuam atualizando normalmente (fluxo chatsUpdate é separado).
     const muteList = isGroup ? (settings.mutedGroups ?? []) : (settings.mutedContacts ?? []);
-    const muteKey  = isGroup ? chatName : sender;
+    const muteKey = isGroup ? chatName : sender;
     if (muteList.some(m => m.toLowerCase() === muteKey.toLowerCase())) {
       this.output.appendLine(`  → silenciado nas settings: ${muteKey}`);
       return;
@@ -164,8 +164,8 @@ export class NotificationManager {
       this.flashOriginalText = this.statusBarItem.text;
     }
 
-    this.statusBarItem.text     = `$(comment-discussion) ${nickname}: ${sender}`;
-    this.statusBarItem.color    = color;
+    this.statusBarItem.text = `$(comment-discussion) ${nickname}: ${sender}`;
+    this.statusBarItem.color = color;
     this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
 
     // Cancela flash anterior da mesma conta se houver
@@ -176,11 +176,11 @@ export class NotificationManager {
       this.flashTimers.delete(nickname);
       // Só restaura visual quando não há mais nenhum flash ativo
       if (this.flashTimers.size === 0) {
-        this.statusBarItem.color           = undefined;
+        this.statusBarItem.color = undefined;
         this.statusBarItem.backgroundColor = undefined;
         if (this.flashOriginalText !== undefined) {
-          this.statusBarItem.text  = this.flashOriginalText;
-          this.flashOriginalText   = undefined;
+          this.statusBarItem.text = this.flashOriginalText;
+          this.flashOriginalText = undefined;
         }
         this.updateBadge();
       }
