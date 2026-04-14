@@ -4,9 +4,10 @@ import * as path from 'path';
 import { EventEmitter } from 'events';
 import { WhatsAppClient, WWebMessage } from './WhatsAppClient';
 import { QRCodePanel } from './QRCodePanel';
-import { AccountMeta, AccountStatus } from './types';
+import { AccountMeta, AccountNotificationSettings, AccountStatus, DEFAULT_NOTIFICATION_SETTINGS } from './types';
 
 const GLOBAL_STATE_KEY = 'whatsapp.accounts';
+const NOTIF_SETTINGS_PREFIX = 'whatsapp.notif.';
 
 // ---------------------------------------------------------------------------
 // Type-safe overloads
@@ -45,6 +46,23 @@ export class AccountManager extends EventEmitter {
 
   getClient(nickname: string): WhatsAppClient | undefined {
     return this.clients.get(nickname);
+  }
+
+  getNotificationSettings(nickname: string): AccountNotificationSettings {
+    return this.context.globalState.get<AccountNotificationSettings>(
+      `${NOTIF_SETTINGS_PREFIX}${nickname}`,
+      { ...DEFAULT_NOTIFICATION_SETTINGS },
+    );
+  }
+
+  async saveNotificationSettings(
+    nickname: string,
+    settings: AccountNotificationSettings,
+  ): Promise<void> {
+    await this.context.globalState.update(
+      `${NOTIF_SETTINGS_PREFIX}${nickname}`,
+      settings,
+    );
   }
 
   // -------------------------------------------------------------------------

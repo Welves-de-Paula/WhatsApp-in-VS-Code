@@ -15,7 +15,8 @@
     "onCommand:whatsapp.quickReply",
     "onCommand:whatsapp.addAccount",
     "onCommand:whatsapp.removeAccount",
-    "onCommand:whatsapp.openChat"
+    "onCommand:whatsapp.openChat",
+    "onCommand:whatsapp.openNotificationSettings"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -37,6 +38,10 @@
       {
         "command": "whatsapp.openChat",
         "title": "WhatsApp: Abrir Conversa"
+      },
+      {
+        "command": "whatsapp.openNotificationSettings",
+        "title": "WhatsApp: Configurar Notificações"
       }
     ],
     "keybindings": [

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { AccountManager } from './AccountManager';
 import { SidebarProvider } from './SidebarProvider';
 import { NotificationManager } from './notificationManager';
+import { NotificationSettingsPanel } from './NotificationSettingsPanel';
 import { executeQuickReply, executeOpenChat } from './quickReply';
 
 let accountManager: AccountManager | undefined;
@@ -28,7 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // ------------------------------------------------------------------
   // Notification manager — status bar + toasts de mensagens recebidas
   // ------------------------------------------------------------------
-  const notificationManager = new NotificationManager(accountManager);
+  const notificationManager = new NotificationManager(accountManager, context.extensionUri);
   context.subscriptions.push({ dispose: () => notificationManager.dispose() });
 
   // ------------------------------------------------------------------
@@ -69,6 +70,22 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       });
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'whatsapp.openNotificationSettings',
+      async (nickname?: string) => {
+        const target =
+          nickname ??
+          (await vscode.window.showQuickPick(
+            accountManager!.getClients().map((c) => c.nickname),
+            { placeHolder: 'Selecione a conta…' },
+          ));
+        if (!target) return;
+        NotificationSettingsPanel.openOrReveal(target, accountManager!, context.extensionUri);
+      },
+    ),
   );
 
   context.subscriptions.push(

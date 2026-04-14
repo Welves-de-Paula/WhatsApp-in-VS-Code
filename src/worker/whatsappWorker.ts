@@ -247,8 +247,11 @@ process.on('message', (raw: unknown) => {
 
           // Tenta primeiro pelo método do cliente
           try {
+            log('info', `getChatById para: ${msg.chatId}`);
             const chat = await client.getChatById(msg.chatId);
+            log('info', `Chat obtido: ${chat?.name}, buscando mensagens...`);
             const rawMessages = await chat.fetchMessages({ limit: 50 });
+            log('info', `Mensagens obtidas: ${rawMessages.length}`);
             const messages = rawMessages.map((m: any) => ({
               id: m.id._serialized,
               body: m.body || '',
@@ -259,61 +262,38 @@ process.on('message', (raw: unknown) => {
             send({ type: 'sendResult', success: true, messages });
             return;
           } catch (innerErr) {
-            // Se falhar, tenta via Puppeteer
-            log('info', 'Método padrão falhou, tentando via Puppeteer');
+            const errMsg = (innerErr as Error).message || String(innerErr);
+            log('info', `Método padrão falhou: ${errMsg}, tentando via Puppeteer`);
           }
 
-          // Fallback: tenta acessar via Puppeteer
-          // @ts-ignore - page é acessível internamente
+          // Fallback: tenta acessar via Puppeteer - método simplificado
+          // @ts-ignore
           const page = client.page || (client as any).pupPage;
           if (!page) {
             throw new Error('Navegador não disponível');
           }
 
-          // Vai para o chat primeiro
-          await page.goto(`https://web.whatsapp.com/app?chat=${msg.chatId}`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => { });
-          await new Promise(r => setTimeout(r, 3000));
-
-          await page.waitForSelector('#app', { timeout: 10000 });
+          // Vai para o chat primeiro e espera carregar
+          await page.goto(`https://web.whatsapp.com/app?chat=${msg.chatId}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
+          await new Promise(r => setTimeout(r, 5000));
 
           const messages = await page.evaluate((cid: string) => {
-            // @ts-ignore
-            const w = window as any;
             const result: any[] = [];
             try {
-              // Método 1: Store.Chat.getById
-              const chat = w.Store.Chat.getById(cid);
-              if (chat && chat.msgs) {
-                const msgs = chat.msgs._models || chat.msgs.models || [];
-                msgs.slice(-50).forEach((m: any) => {
-                  if (m && m.id) {
-                    result.push({
-                      id: m.id._serialized || m.id,
-                      body: m.body || '',
-                      fromMe: m.isMe || false,
-                      timestamp: m.t || m.timestamp || 0,
-                      sender: m._data?.notifyName || m.from?.replace(/@[cg]\.us$/, '') || ''
-                    });
-                  }
-                });
-              }
-
-              // Método 2: Se não achou, tenta pela UI
-              if (result.length === 0) {
-                const messagePanels = document.querySelectorAll('[data-message-id]');
-                messagePanels.forEach((el: any) => {
-                  try {
-                    const msgId = el.getAttribute('data-message-id');
-                    const bodyEl = el.querySelector('[role="button"] span[dir="ltr"], [role="button"] span[dir="rtl"], .selectable-text span');
-                    const body = bodyEl ? bodyEl.innerText : '';
+              // Tenta obter mensagens da UI do WhatsApp
+              const messageElements = document.querySelectorAll('[data-message-id], .message-[class*="message"]');
+              
+              messageElements.forEach((el: any) => {
+                try {
+                  const msgId = el.getAttribute('data-message-id') || Math.random().toString();
+                  const bodyEl = el.querySelector('.selectable-text span, [role="button"] span[dir]');
+                  const body = bodyEl ? bodyEl.innerText?.trim() : '';
+                  
+                  if (body) {
                     const fromMe = el.classList.contains('message-out') || el.classList.contains('out');
-                    const timeEl = el.querySelector('[data-pre-plain-text]');
-                    let timestamp = 0;
-                    if (timeEl) {
-                      const match = timeEl.getAttribute('data-pre-plain-text')?.match(/\d+/);
-                      if (match) timestamp = parseInt(match[0]);
-                    }
-
+                    const timeEl = el.querySelector('[data-pre-plain-text], .copyable-text span');
+                    let timestamp = Date.now() / 1000;
+                    
                     result.push({
                       id: msgId,
                       body: body,
@@ -321,35 +301,37 @@ process.on('message', (raw: unknown) => {
                       timestamp: timestamp,
                       sender: ''
                     });
-                  } catch (e) { }
-                });
-              }
-
-              // Método 3: Tenta Store.Msg
-              if (result.length === 0 && w.Store.Msg) {
+                  }
+                } catch(e) {}
+              });
+              
+              // Se ainda não achou, tenta via Store
+              if (result.length === 0) {
                 try {
-                  const chat = w.Store.Chat.getById(cid);
-                  if (chat) {
-                    const msgs = w.Store.Msg.getAllMsgsInChat(chat);
-                    if (msgs && msgs.forEach) {
-                      msgs.forEach((m: any) => {
+                  // @ts-ignore
+                  const w = window as any;
+                  const chat = w.Store?.Chat?.get?.(cid) || w.Store?.Chat?.getById?.(cid);
+                  if (chat && chat.msgs) {
+                    const msgs = chat.msgs._models || chat.msgs.models || [];
+                    msgs.slice(-50).forEach((m: any) => {
+                      if (m && m.id && m.body) {
                         result.push({
                           id: m.id._serialized || m.id,
                           body: m.body || '',
-                          fromMe: m.isMe || false,
+                          fromMe: m.isMe || m.fromMe || false,
                           timestamp: m.t || m.timestamp || 0,
                           sender: m._data?.notifyName || ''
                         });
-                      });
-                    }
+                      }
+                    });
                   }
-                } catch (e) { }
+                } catch(e) {}
               }
-            } catch (e) {
-              // ignora
-            }
-            return result.slice(-50);
+            } catch (e) {}
+            return result;
           }, msg.chatId);
+
+          log('info', `Mensagens via Puppeteer: ${messages.length}`);
 
           send({ type: 'sendResult', success: true, messages });
         } catch (err) {

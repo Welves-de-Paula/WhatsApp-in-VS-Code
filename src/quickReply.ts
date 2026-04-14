@@ -256,12 +256,16 @@ export async function executeOpenChat(
     chatPanel.reveal(vscode.ViewColumn.One);
   }
 
+  const panel = chatPanel;
   try {
-    chatPanel.title = `${chatName} - WhatsApp`;
-    chatPanel.webview.html = generateLoadingHtml(chatName);
-    
+    panel.title = `${chatName} - WhatsApp`;
+    panel.webview.html = generateLoadingHtml(chatName);
+
     const messages = await client.getChatMessages(chatId);
-    chatPanel.webview.html = generateChatHtml(messages, chatName, chatId, accountNickname);
+
+    // O painel pode ter sido fechado durante o await
+    if (chatPanel !== panel) return;
+    panel.webview.html = generateChatHtml(messages, chatName, chatId, accountNickname);
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

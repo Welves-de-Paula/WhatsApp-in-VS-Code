@@ -1,18 +1,22 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { AccountManager } from './AccountManager';
+import { NotificationSettingsPanel } from './NotificationSettingsPanel';
 import { AccountState, HostMessage, WebviewMessage } from './types';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view: vscode.WebviewView | undefined;
+  private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly accountManager: AccountManager,
     private readonly extensionUri: vscode.Uri,
   ) {
-    // Sempre que a lista de contas ou o estado de alguma conta mudar,
-    // re-envia o estado completo para o webview.
-    accountManager.on('listChanged', () => this.pushFullState());
+    // Debounce para evitar piscar quando vários eventos chegam em rajada
+    accountManager.on('listChanged', () => {
+      if (this._debounceTimer) clearTimeout(this._debounceTimer);
+      this._debounceTimer = setTimeout(() => this.pushFullState(), 80);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -86,6 +90,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'removeAccount':
           if (raw.nickname) {
             void this.handleRemoveAccount(raw.nickname);
+          }
+          break;
+
+        case 'openSettings':
+          if (raw.nickname) {
+            NotificationSettingsPanel.openOrReveal(
+              raw.nickname,
+              this.accountManager,
+              this.extensionUri,
+            );
           }
           break;
       }
@@ -340,6 +354,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
     .btn-remove:hover { opacity: 1; color: #f44336; }
 
+    .btn-settings {
+      background: transparent;
+      border: none;
+      color: var(--vscode-foreground);
+      opacity: 0.45;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 0 2px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .btn-settings:hover { opacity: 1; }
+
     /* ---- Chat list ---- */
     .chat-list { padding: 2px 0; }
 
@@ -457,6 +484,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         : '';
 
       var removeBtn = '<button class="btn-remove" title="Remover conta" data-action="remove" data-nickname="' + esc(acct.nickname) + '">&#10005;</button>';
+      var settingsBtn = '<button class="btn-settings" title="Configurar notifica\u00e7\u00f5es" data-action="openSettings" data-nickname="' + esc(acct.nickname) + '">&#x2699;</button>';
 
       var body = '';
       if (isExpanded) {
@@ -488,6 +516,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             '<span class="section-name">' + esc(acct.nickname) + '</span>' +
             '<span class="section-status">' + esc(label) + '</span>' +
             connectBtn +
+            settingsBtn +
             removeBtn +
           '</div>' +
           body +
@@ -507,6 +536,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     // ----- Actions (event delegation — sem onclick inline para respeitar CSP) -----
     document.getElementById('root').addEventListener('click', function(e) {
       var target = e.target;
+
+      // Botão "Configurações" (⚙)
+      var settingsBtn = target.closest('[data-action="openSettings"]');
+      if (settingsBtn) {
+        e.stopPropagation();
+        vscode.postMessage({ command: 'openSettings', nickname: settingsBtn.dataset.nickname });
+        return;
+      }
 
       // Botão "Remover" (×)
       var removeBtn = target.closest('[data-action="remove"]');
