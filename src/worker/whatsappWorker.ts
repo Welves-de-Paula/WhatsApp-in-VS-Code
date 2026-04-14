@@ -168,7 +168,12 @@ async function loadChats(): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawChats: any[] = await client.getChats();
-    const chats: SerializedChat[] = rawChats.slice(0, 30).map(
+    const filteredChats = rawChats.filter((chat: any) => {
+      const isPinned = chat.pinned === true || chat.pin !== undefined;
+      const isArchived = chat.archived === true || chat.archive !== undefined;
+      return isPinned || !isArchived;
+    });
+    const chats: SerializedChat[] = filteredChats.slice(0, 30).map(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (chat: any): SerializedChat => ({
         id: chat.id._serialized as string,
@@ -235,16 +240,117 @@ process.on('message', (raw: unknown) => {
       }
       (async () => {
         try {
-          const chat = await client.getChatById(msg.chatId);
-          const messages = await chat.fetchMessages({ limit: 50 });
-          const serialized: SerializedMessage[] = messages.map((m: any) => ({
-            id: m.id._serialized as string,
-            body: m.body as string,
-            fromMe: m.fromMe as boolean,
-            timestamp: (m.timestamp as number) ?? 0,
-            sender: (m._data?.notifyName as string) ?? m.from.replace(/@[cg]\.us$/, ''),
-          }));
-          send({ type: 'sendResult', success: true, messages: serialized });
+          if (!client) {
+            throw new Error('Cliente não está pronto');
+          }
+          
+          // Tenta primeiro pelo método do cliente
+          try {
+            const chat = await client.getChatById(msg.chatId);
+            const rawMessages = await chat.fetchMessages({ limit: 50 });
+            const messages = rawMessages.map((m: any) => ({
+              id: m.id._serialized,
+              body: m.body || '',
+              fromMe: m.fromMe,
+              timestamp: m.timestamp,
+              sender: m._data?.notifyName || m.from?.replace(/@[cg]\.us$/, '')
+            }));
+            send({ type: 'sendResult', success: true, messages });
+            return;
+          } catch (innerErr) {
+            // Se falhar, tenta via Puppeteer
+            log('info', 'Método padrão falhou, tentando via Puppeteer');
+          }
+          
+          // Fallback: tenta acessar via Puppeteer
+          // @ts-ignore - page é acessível internamente
+          const page = client.page || (client as any).pupPage;
+          if (!page) {
+            throw new Error('Navegador não disponível');
+          }
+          
+          // Vai para o chat primeiro
+          await page.goto(`https://web.whatsapp.com/app?chat=${msg.chatId}`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
+          await new Promise(r => setTimeout(r, 3000));
+          
+          await page.waitForSelector('#app', { timeout: 10000 });
+          
+          const messages = await page.evaluate((cid: string) => {
+            // @ts-ignore
+            const w = window as any;
+            const result: any[] = [];
+            try {
+              // Método 1: Store.Chat.getById
+              const chat = w.Store.Chat.getById(cid);
+              if (chat && chat.msgs) {
+                const msgs = chat.msgs._models || chat.msgs.models || [];
+                msgs.slice(-50).forEach((m: any) => {
+                  if (m && m.id) {
+                    result.push({
+                      id: m.id._serialized || m.id,
+                      body: m.body || '',
+                      fromMe: m.isMe || false,
+                      timestamp: m.t || m.timestamp || 0,
+                      sender: m._data?.notifyName || m.from?.replace(/@[cg]\.us$/, '') || ''
+                    });
+                  }
+                });
+              }
+              
+              // Método 2: Se não achou, tenta pela UI
+              if (result.length === 0) {
+                const messagePanels = document.querySelectorAll('[data-message-id]');
+                messagePanels.forEach((el: any) => {
+                  try {
+                    const msgId = el.getAttribute('data-message-id');
+                    const bodyEl = el.querySelector('[role="button"] span[dir="ltr"], [role="button"] span[dir="rtl"], .selectable-text span');
+                    const body = bodyEl ? bodyEl.innerText : '';
+                    const fromMe = el.classList.contains('message-out') || el.classList.contains('out');
+                    const timeEl = el.querySelector('[data-pre-plain-text]');
+                    let timestamp = 0;
+                    if (timeEl) {
+                      const match = timeEl.getAttribute('data-pre-plain-text')?.match(/\d+/);
+                      if (match) timestamp = parseInt(match[0]);
+                    }
+                    
+                    result.push({
+                      id: msgId,
+                      body: body,
+                      fromMe: fromMe,
+                      timestamp: timestamp,
+                      sender: ''
+                    });
+                  } catch(e) {}
+                });
+              }
+              
+              // Método 3: Tenta Store.Msg
+              if (result.length === 0 && w.Store.Msg) {
+                try {
+                  const chat = w.Store.Chat.getById(cid);
+                  if (chat) {
+                    const msgs = w.Store.Msg.getAllMsgsInChat(chat);
+                    if (msgs && msgs.forEach) {
+                      msgs.forEach((m: any) => {
+                        result.push({
+                          id: m.id._serialized || m.id,
+                          body: m.body || '',
+                          fromMe: m.isMe || false,
+                          timestamp: m.t || m.timestamp || 0,
+                          sender: m._data?.notifyName || ''
+                        });
+                      });
+                    }
+                  }
+                } catch(e) {}
+              }
+            } catch (e) {
+              // ignora
+            }
+            return result.slice(-50);
+          }, msg.chatId);
+          
+          send({ type: 'sendResult', success: true, messages });
         } catch (err) {
           send({
             type: 'sendResult',

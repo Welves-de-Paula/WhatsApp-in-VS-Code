@@ -58,6 +58,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           }
           break;
 
+        case 'openChat':
+          if (raw.chatId?.trim() && raw.chatName?.trim() && raw.accountNickname?.trim()) {
+            void vscode.commands.executeCommand('whatsapp.openChat', raw.chatId.trim(), raw.chatName.trim(), raw.accountNickname.trim());
+          }
+          break;
+
         case 'addAccount':
           if (raw.nickname?.trim()) {
             void this.accountManager.addAccount(raw.nickname.trim()).catch(
@@ -457,7 +463,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         if (acct.status === 'ready' && acct.chats.length > 0) {
           body = '<div class="chat-list">' +
             acct.chats.slice(0, 20).map(function(chat) {
-              return '<div class="chat-item" title="' + esc(chat.name) + '">' +
+              return '<div class="chat-item" data-action="openChat" data-chat-id="' + esc(chat.id) + '" data-chat-name="' + esc(chat.name) + '" data-account-nickname="' + esc(acct.nickname) + '">' +
                 '<div class="avatar">' + esc(initials(chat.name)) + '</div>' +
                 '<div class="chat-body">' +
                   '<div class="chat-name">' + esc(chat.name) + '</div>' +
@@ -515,6 +521,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       if (connectBtn) {
         e.stopPropagation();
         vscode.postMessage({ command: 'reconnect', nickname: connectBtn.dataset.nickname });
+        return;
+      }
+
+      // Clique no chat → abrir conversa
+      var chatItem = target.closest('[data-action="openChat"]');
+      if (chatItem) {
+        e.stopPropagation();
+        vscode.postMessage({ 
+          command: 'openChat', 
+          chatId: chatItem.dataset.chatId,
+          chatName: chatItem.dataset.chatName,
+          accountNickname: chatItem.dataset.accountNickname
+        });
         return;
       }
 

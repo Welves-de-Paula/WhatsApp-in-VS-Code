@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { AccountManager } from './AccountManager';
 import { SidebarProvider } from './SidebarProvider';
 import { NotificationManager } from './notificationManager';
-import { executeQuickReply } from './quickReply';
+import { executeQuickReply, executeOpenChat } from './quickReply';
 
 let accountManager: AccountManager | undefined;
 
@@ -37,6 +37,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('whatsapp.quickReply', () => {
       void executeQuickReply(accountManager!);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('whatsapp.openChat', (chatId: string, chatName: string, accountNickname: string) => {
+      void executeOpenChat(accountManager!, chatId, chatName, accountNickname);
     }),
   );
 

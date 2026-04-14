@@ -7,6 +7,9 @@ interface ChatPickItem extends vscode.QuickPickItem {
   accountNickname: string;
 }
 
+let chatPanel: vscode.WebviewPanel | undefined;
+let currentChatInfo: { chatId: string; chatName: string; accountNickname: string } | undefined;
+
 export async function executeQuickReply(
   accountManager: AccountManager,
 ): Promise<void> {
@@ -215,4 +218,67 @@ async function sendReply(
     const message = err instanceof Error ? err.message : String(err);
     void vscode.window.showErrorMessage(`Falha ao enviar mensagem: ${message}`);
   }
+}
+
+export async function executeOpenChat(
+  accountManager: AccountManager,
+  chatId: string,
+  chatName: string,
+  accountNickname: string,
+): Promise<void> {
+  const client = accountManager.getClient(accountNickname);
+  if (!client) {
+    void vscode.window.showErrorMessage('Conta não encontrada.');
+    return;
+  }
+
+  if (client.status !== 'ready') {
+    void vscode.window.showWarningMessage('Conta não conectada.');
+    return;
+  }
+
+  // Armazena info do chat atual
+  currentChatInfo = { chatId, chatName, accountNickname };
+
+  // Reutiliza o painel existente ou cria um novo
+  if (!chatPanel) {
+    chatPanel = vscode.window.createWebviewPanel(
+      'whatsappChat',
+      'WhatsApp Chat',
+      vscode.ViewColumn.One,
+      { enableScripts: true },
+    );
+    chatPanel.onDidDispose(() => {
+      chatPanel = undefined;
+      currentChatInfo = undefined;
+    });
+  } else {
+    chatPanel.reveal(vscode.ViewColumn.One);
+  }
+
+  try {
+    chatPanel.title = `${chatName} - WhatsApp`;
+    chatPanel.webview.html = generateLoadingHtml(chatName);
+    
+    const messages = await client.getChatMessages(chatId);
+    chatPanel.webview.html = generateChatHtml(messages, chatName, chatId, accountNickname);
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    void vscode.window.showErrorMessage(`Erro ao carregar mensagens: ${message}`);
+  }
+}
+
+function generateLoadingHtml(chatName: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: var(--vscode-font-family); padding: 20px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); text-align: center; }
+  </style>
+</head>
+<body>
+  <p>Carregando ${escapeHtml(chatName)}...</p>
+</body>
+</html>`;
 }

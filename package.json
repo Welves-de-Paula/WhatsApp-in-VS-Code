@@ -14,7 +14,8 @@
     "onView:whatsappMulti.sidebar",
     "onCommand:whatsapp.quickReply",
     "onCommand:whatsapp.addAccount",
-    "onCommand:whatsapp.removeAccount"
+    "onCommand:whatsapp.removeAccount",
+    "onCommand:whatsapp.openChat"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -32,6 +33,10 @@
       {
         "command": "whatsapp.removeAccount",
         "title": "WhatsApp: Remover Conta"
+      },
+      {
+        "command": "whatsapp.openChat",
+        "title": "WhatsApp: Abrir Conversa"
       }
     ],
     "keybindings": [

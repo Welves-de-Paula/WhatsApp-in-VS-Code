@@ -33,10 +33,11 @@ export interface AccountState {
 }
 
 export interface WebviewMessage {
-  command: 'init' | 'quickReply' | 'reconnect' | 'addAccount' | 'removeAccount' | 'sendChatMessage';
+  command: 'init' | 'quickReply' | 'reconnect' | 'addAccount' | 'removeAccount' | 'sendChatMessage' | 'openChat';
   nickname?: string;
   chatId?: string;
   accountNickname?: string;
+  chatName?: string;
   text?: string;
 }
 
