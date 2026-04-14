@@ -39,11 +39,15 @@ export class NotificationManager {
   // Message handler
   // ---------------------------------------------------------------------------
 
+  private isChannelJid(jid: string): boolean {
+    return jid.endsWith('@newsletter');
+  }
+
   private handleMessage(nickname: string, msg: WWebMessage): void {
     this.output.appendLine(`[${new Date().toISOString()}] mensagem recebida de ${msg.from}`);
 
-    // Canais de broadcast nunca notificam
-    if (msg.from.includes('@broadcast')) return;
+    // Canais de broadcast/newsletter nunca notificam
+    if (msg.from.includes('@broadcast') || this.isChannelJid(msg.from)) return;
 
     const settings = this.accountManager.getNotificationSettings(nickname);
     this.output.appendLine(`  sound=${settings.sound}  filter=${settings.filter}  visual=${settings.visualAlert}`);

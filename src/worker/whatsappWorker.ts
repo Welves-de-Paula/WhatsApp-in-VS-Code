@@ -84,7 +84,7 @@ let client: any = null;
 /** Cache de todos os chats carregados — evita chamar getChats() repetidamente */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let cachedAllChats: any[] = [];
-const recentIncomingMessageIds: string[] = [];
+const recentIncomingMessageKeys: string[] = [];
 
 /** Debounce para evitar chamadas duplas de loadChats (message + message_create) */
 let loadChatsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -96,30 +96,60 @@ function scheduleLoadChats(): void {
   }, 300);
 }
 
-function markIncomingMessageSeen(id: string): boolean {
-  if (!id) return false;
-  if (recentIncomingMessageIds.includes(id)) return true;
-  recentIncomingMessageIds.push(id);
-  if (recentIncomingMessageIds.length > 200) {
-    recentIncomingMessageIds.splice(0, recentIncomingMessageIds.length - 200);
+function markIncomingMessageSeen(key: string): boolean {
+  if (!key) return false;
+  if (recentIncomingMessageKeys.includes(key)) return true;
+  recentIncomingMessageKeys.push(key);
+  if (recentIncomingMessageKeys.length > 300) {
+    recentIncomingMessageKeys.splice(0, recentIncomingMessageKeys.length - 300);
   }
   return false;
+}
+
+function isChannelJid(jid: string): boolean {
+  return jid.endsWith('@newsletter');
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function forwardIncomingMessage(msg: any): void {
   try {
-    const rawId = msg?.id?._serialized ?? msg?.id?.id ?? msg?.id ?? '';
-    const id = String(rawId);
-    if (markIncomingMessageSeen(id)) return;
-
     const fromMe = Boolean(msg?.fromMe ?? msg?._data?.fromMe ?? msg?.id?.fromMe);
     if (fromMe) return;
 
     const from = String(msg?.from ?? '');
-    if (!from || from.includes('@broadcast')) return;
+    if (!from || from.includes('@broadcast') || isChannelJid(from)) return;
+
+    const isStatus = Boolean(msg?.isStatus ?? msg?._data?.isStatus);
+    if (isStatus || from === 'status@broadcast') return;
+
+    const msgType = String(msg?.type ?? msg?._data?.type ?? '');
+    const blockedTypes = new Set([
+      'ciphertext',
+      'e2e_notification',
+      'notification',
+      'notification_template',
+      'gp2',
+      'protocol',
+      'revoked',
+      'newsletter_notification',
+    ]);
+    if (blockedTypes.has(msgType)) return;
+
+    const isNewMsg = msg?.isNewMsg ?? msg?._data?.isNewMsg;
+    if (isNewMsg === false) return;
 
     const body = String(msg?.body ?? '');
+    const hasMedia = Boolean(msg?.hasMedia ?? msg?._data?.isMedia);
+
+    // Evita alertas vazios que normalmente vêm de eventos internos/sistema.
+    if (!hasMedia && body.trim().length === 0) return;
+
+    const rawId = msg?.id?._serialized ?? msg?.id?.id ?? msg?.id ?? '';
+    const id = String(rawId).trim();
+    const timestamp = Number(msg?.timestamp ?? msg?._data?.t ?? 0) || 0;
+    const dedupeKey = id || `${from}|${msgType}|${timestamp}|${body.slice(0, 120)}|${hasMedia ? 1 : 0}`;
+    if (markIncomingMessageSeen(dedupeKey)) return;
+
     send({
       type: 'message',
       from,

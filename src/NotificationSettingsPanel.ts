@@ -82,16 +82,17 @@ export class NotificationSettingsPanel {
       `media-src ${this.panel.webview.cspSource}`,
     ].join('; ');
 
-    const dingUri   = this.soundUri('ding.wav');
-    const chimeUri  = this.soundUri('chime.wav');
-    const popUri    = this.soundUri('pop.wav');
+    const dingUri = this.soundUri('ding.wav');
+    const chimeUri = this.soundUri('chime.wav');
+    const popUri = this.soundUri('pop.wav');
+    const universfieldUri = this.soundUri('universfield.wav');
 
     function sel(option: string, current: string, label: string): string {
       return `<option value="${option}"${current === option ? ' selected' : ''}>${label}</option>`;
     }
 
-    const mutedContactsVal  = (s.mutedContacts  ?? []).join('\n');
-    const mutedGroupsVal    = (s.mutedGroups    ?? []).join('\n');
+    const mutedContactsVal = (s.mutedContacts ?? []).join('\n');
+    const mutedGroupsVal = (s.mutedGroups ?? []).join('\n');
 
     return /* html */ `<!DOCTYPE html>
 <html lang="pt-br">
@@ -261,11 +262,11 @@ export class NotificationSettingsPanel {
     <div class="field">
       <label for="sel-sound">Arquivo de som</label>
       <select id="sel-sound">
-        ${sel('ding',   s.sound, 'Ding (padrão)')}
-        ${sel('chime',  s.sound, 'Chime')}
-        ${sel('pop',    s.sound, 'Pop')}
+        ${sel('ding', s.sound, 'Ding (padrão)')}
+        ${sel('chime', s.sound, 'Chime')}
+        ${sel('pop', s.sound, 'Pop')}
         ${sel('custom', s.sound, 'Personalizado…')}
-        ${sel('none',   s.sound, 'Sem som')}
+        ${sel('none', s.sound, 'Sem som')}
       </select>
       <button class="btn-preview" id="btn-preview">&#x25B6; Ouvir</button>
     </div>
@@ -289,10 +290,10 @@ export class NotificationSettingsPanel {
     <div class="field">
       <label for="sel-visual">Tipo de alerta</label>
       <select id="sel-visual">
-        ${sel('banner',        s.visualAlert, 'Banner (notificação nativa)')}
+        ${sel('banner', s.visualAlert, 'Banner (notificação nativa)')}
         ${sel('statusBarFlash', s.visualAlert, 'Flash na status bar (3s)')}
-        ${sel('badgeOnly',     s.visualAlert, 'Somente badge de contagem')}
-        ${sel('none',          s.visualAlert, 'Nenhum')}
+        ${sel('badgeOnly', s.visualAlert, 'Somente badge de contagem')}
+        ${sel('none', s.visualAlert, 'Nenhum')}
       </select>
     </div>
 
@@ -310,7 +311,7 @@ export class NotificationSettingsPanel {
     <div class="field">
       <label for="sel-filter">Notificar</label>
       <select id="sel-filter">
-        ${sel('all',    s.filter, 'Todas as mensagens')}
+        ${sel('all', s.filter, 'Todas as mensagens')}
         ${sel('direct', s.filter, 'Somente mensagens diretas')}
         ${sel('groups', s.filter, 'Somente grupos')}
       </select>
@@ -338,6 +339,7 @@ export class NotificationSettingsPanel {
   <audio id="audio-ding"  src="${dingUri}"  preload="auto"></audio>
   <audio id="audio-chime" src="${chimeUri}" preload="auto"></audio>
   <audio id="audio-pop"   src="${popUri}"   preload="auto"></audio>
+  <audio id="audio-universfield" src="${universfieldUri}" preload="auto"></audio>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
