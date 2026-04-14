@@ -84,7 +84,7 @@ let client: any = null;
 /** Cache de todos os chats carregados — evita chamar getChats() repetidamente */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let cachedAllChats: any[] = [];
-const recentIncomingMessageKeys: string[] = [];
+const recentIncomingMessageIds: string[] = [];
 
 /** Debounce para evitar chamadas duplas de loadChats (message + message_create) */
 let loadChatsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -96,12 +96,12 @@ function scheduleLoadChats(): void {
   }, 300);
 }
 
-function markIncomingMessageSeen(key: string): boolean {
-  if (!key) return false;
-  if (recentIncomingMessageKeys.includes(key)) return true;
-  recentIncomingMessageKeys.push(key);
-  if (recentIncomingMessageKeys.length > 300) {
-    recentIncomingMessageKeys.splice(0, recentIncomingMessageKeys.length - 300);
+function markIncomingMessageSeen(id: string): boolean {
+  if (!id) return false;
+  if (recentIncomingMessageIds.includes(id)) return true;
+  recentIncomingMessageIds.push(id);
+  if (recentIncomingMessageIds.length > 300) {
+    recentIncomingMessageIds.splice(0, recentIncomingMessageIds.length - 300);
   }
   return false;
 }
@@ -146,9 +146,7 @@ function forwardIncomingMessage(msg: any): void {
 
     const rawId = msg?.id?._serialized ?? msg?.id?.id ?? msg?.id ?? '';
     const id = String(rawId).trim();
-    const timestamp = Number(msg?.timestamp ?? msg?._data?.t ?? 0) || 0;
-    const dedupeKey = id || `${from}|${msgType}|${timestamp}|${body.slice(0, 120)}|${hasMedia ? 1 : 0}`;
-    if (markIncomingMessageSeen(dedupeKey)) return;
+    if (id && markIncomingMessageSeen(id)) return;
 
     send({
       type: 'message',
