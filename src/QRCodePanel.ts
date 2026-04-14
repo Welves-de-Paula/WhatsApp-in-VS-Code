@@ -4,11 +4,11 @@ import * as QRCode from 'qrcode';
 
 export class QRCodePanel {
   private panel: vscode.WebviewPanel | null = null;
-  private readonly accountIndex: number;
+  private readonly nickname: string;
   private readonly extensionUri: vscode.Uri;
 
-  constructor(accountIndex: number, extensionUri: vscode.Uri) {
-    this.accountIndex = accountIndex;
+  constructor(nickname: string, extensionUri: vscode.Uri) {
+    this.nickname = nickname;
     this.extensionUri = extensionUri;
   }
 
@@ -22,8 +22,8 @@ export class QRCodePanel {
 
     if (!this.panel) {
       this.panel = vscode.window.createWebviewPanel(
-        `whatsappQR${this.accountIndex}`,
-        `WhatsApp Conta ${this.accountIndex + 1} — QR Code`,
+        `whatsappQR_${this.nickname}`,
+        `WhatsApp "${this.nickname}" — QR Code`,
         vscode.ViewColumn.Active,
         {
           enableScripts: false,
@@ -48,7 +48,7 @@ export class QRCodePanel {
   private buildHtml(qrDataUrl: string): string {
     // Data-URL images don't need a nonce — CSP restricts to data: only
     const nonce = crypto.randomBytes(16).toString('base64');
-    const acct = this.accountIndex + 1;
+    const acct = this.nickname;
 
     return /* html */ `<!DOCTYPE html>
 <html lang="pt-br">
@@ -93,7 +93,7 @@ export class QRCodePanel {
   </style>
 </head>
 <body>
-  <h2>Conta ${acct} — Escanear QR Code</h2>
+  <h2>"${acct}" — Escanear QR Code</h2>
   <img src="${qrDataUrl}" alt="QR Code WhatsApp" width="280" height="280">
   <ol class="steps">
     <li>Abra o WhatsApp no celular</li>

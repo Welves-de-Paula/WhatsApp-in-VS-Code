@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-multi",
   "displayName": "WhatsApp Multi",
-  "description": "Gerencie até 2 contas do WhatsApp direto no VS Code com notificações e quick reply",
+  "description": "Gerencie contas do WhatsApp direto no VS Code com notificações e quick reply",
   "version": "0.1.0",
   "publisher": "local",
   "engines": {
@@ -22,12 +22,13 @@
         "icon": "$(reply)"
       },
       {
-        "command": "whatsapp.reconnectAccount1",
-        "title": "WhatsApp: Reconectar Conta 1"
+        "command": "whatsapp.addAccount",
+        "title": "WhatsApp: Adicionar Conta",
+        "icon": "$(add)"
       },
       {
-        "command": "whatsapp.reconnectAccount2",
-        "title": "WhatsApp: Reconectar Conta 2"
+        "command": "whatsapp.removeAccount",
+        "title": "WhatsApp: Remover Conta"
       }
     ],
     "keybindings": [

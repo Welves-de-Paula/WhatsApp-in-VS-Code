@@ -1,58 +1,21 @@
 import * as vscode from 'vscode';
-import { WhatsAppClient } from './WhatsAppClient';
+import { AccountManager } from './AccountManager';
 import { SidebarProvider } from './SidebarProvider';
-import { QRCodePanel } from './QRCodePanel';
 import { NotificationManager } from './notificationManager';
 import { executeQuickReply } from './quickReply';
 
-// Kept at module scope so deactivate() can await destruction
-let clients: WhatsAppClient[] = [];
+let accountManager: AccountManager | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-  const storagePath = context.globalStorageUri.fsPath;
+  // ------------------------------------------------------------------
+  // AccountManager — sem nenhum Puppeteer na inicialização
+  // ------------------------------------------------------------------
+  accountManager = new AccountManager(context, context.extensionUri);
 
   // ------------------------------------------------------------------
-  // Create the two account clients (not yet initialised / no Puppeteer)
+  // Sidebar WebviewView
   // ------------------------------------------------------------------
-  clients = [
-    new WhatsAppClient(0, storagePath),
-    new WhatsAppClient(1, storagePath),
-  ];
-
-  const qrPanels = clients.map(
-    (_, i) => new QRCodePanel(i, context.extensionUri),
-  );
-
-  // ------------------------------------------------------------------
-  // Wire QR / ready events for each client
-  // ------------------------------------------------------------------
-  clients.forEach((client, i) => {
-    client.on('qr', (qr) => {
-      qrPanels[i].show(qr).catch((err) =>
-        console.error(`[WhatsApp Multi] Erro ao exibir QR conta ${i + 1}:`, err),
-      );
-    });
-
-    client.on('ready', () => {
-      qrPanels[i].close();
-      void vscode.window.showInformationMessage(
-        `WhatsApp Conta ${i + 1} conectada com sucesso! ✅`,
-      );
-    });
-
-    client.on('statusChange', (status) => {
-      if (status === 'error') {
-        void vscode.window.showErrorMessage(
-          `WhatsApp Conta ${i + 1}: falha na autenticação. Reconecte via painel lateral.`,
-        );
-      }
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // Sidebar WebviewView  (retainContextWhenHidden = true)
-  // ------------------------------------------------------------------
-  const sidebarProvider = new SidebarProvider(clients, context.extensionUri);
+  const sidebarProvider = new SidebarProvider(accountManager, context.extensionUri);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -63,9 +26,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // ------------------------------------------------------------------
-  // Notification manager — status bar + incoming message toasts
+  // Notification manager — status bar + toasts de mensagens recebidas
   // ------------------------------------------------------------------
-  const notificationManager = new NotificationManager(clients);
+  const notificationManager = new NotificationManager(accountManager);
   context.subscriptions.push({ dispose: () => notificationManager.dispose() });
 
   // ------------------------------------------------------------------
@@ -73,37 +36,69 @@ export function activate(context: vscode.ExtensionContext): void {
   // ------------------------------------------------------------------
   context.subscriptions.push(
     vscode.commands.registerCommand('whatsapp.quickReply', () => {
-      void executeQuickReply(clients);
+      void executeQuickReply(accountManager!);
     }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('whatsapp.reconnectAccount1', async () => {
-      await clients[0].initialize().catch((err) =>
-        vscode.window.showErrorMessage(
-          `Erro ao conectar Conta 1: ${(err as Error).message}`,
-        ),
-      );
+    vscode.commands.registerCommand('whatsapp.addAccount', async () => {
+      const nickname = await vscode.window.showInputBox({
+        title: 'Adicionar conta do WhatsApp',
+        prompt: 'Digite um apelido para identificar esta conta',
+        placeHolder: 'Ex: Pessoal, Trabalho, Cliente X…',
+        validateInput: (value) => {
+          if (!value.trim()) return 'O apelido não pode estar em branco.';
+          if (accountManager?.getClient(value.trim())) {
+            return `Já existe uma conta com o apelido "${value.trim()}".`;
+          }
+          return null;
+        },
+      });
+
+      if (!nickname?.trim()) return;
+
+      await accountManager!.addAccount(nickname.trim()).catch((err: unknown) => {
+        void vscode.window.showErrorMessage(
+          `Erro ao adicionar conta: ${(err as Error).message}`,
+        );
+      });
     }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('whatsapp.reconnectAccount2', async () => {
-      await clients[1].initialize().catch((err) =>
-        vscode.window.showErrorMessage(
-          `Erro ao conectar Conta 2: ${(err as Error).message}`,
-        ),
-      );
-    }),
+    vscode.commands.registerCommand(
+      'whatsapp.removeAccount',
+      async (nickname?: string) => {
+        const target =
+          nickname ??
+          (await vscode.window.showQuickPick(
+            accountManager!.getClients().map((c) => c.nickname),
+            { placeHolder: 'Selecione a conta a remover…' },
+          ));
+
+        if (!target) return;
+
+        const choice = await vscode.window.showWarningMessage(
+          `Remover conta "${target}"? Isso apagará a sessão salva.`,
+          { modal: true },
+          'Remover',
+        );
+        if (choice === 'Remover') {
+          await accountManager!.removeAccount(target);
+        }
+      },
+    ),
+  );
+
+  // ------------------------------------------------------------------
+  // Reconecta contas salvas em background (sem bloquear a ativação)
+  // ------------------------------------------------------------------
+  accountManager.initializeAll().catch((err: unknown) =>
+    console.error('[WhatsApp Multi] Erro ao reconectar contas salvas:', (err as Error).message),
   );
 }
 
-/**
- * VS Code awaits the Promise returned by deactivate(), ensuring Puppeteer
- * processes are terminated cleanly before the extension host shuts down.
- */
 export async function deactivate(): Promise<void> {
-  for (const client of clients) {
-    await client.destroy();
-  }
+  await accountManager?.destroyAll();
 }
+

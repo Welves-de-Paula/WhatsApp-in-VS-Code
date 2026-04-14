@@ -1,16 +1,16 @@
 import * as vscode from 'vscode';
-import { WhatsAppClient } from './WhatsAppClient';
+import { AccountManager } from './AccountManager';
 import { ChatInfo } from './types';
 
 interface ChatPickItem extends vscode.QuickPickItem {
   chatId: string;
-  accountIndex: number;
+  accountNickname: string;
 }
 
 export async function executeQuickReply(
-  clients: WhatsAppClient[],
+  accountManager: AccountManager,
 ): Promise<void> {
-  const readyClients = clients.filter((c) => c.status === 'ready');
+  const readyClients = accountManager.getClients().filter((c) => c.status === 'ready');
 
   if (readyClients.length === 0) {
     vscode.window.showWarningMessage(
@@ -19,7 +19,7 @@ export async function executeQuickReply(
     return;
   }
 
-  // Flatten all chats from ready accounts, sorted by most recent first
+  // Achata todas as conversas das contas prontas, ordena por mais recente
   const allChats: ChatInfo[] = readyClients
     .flatMap((c) => c.chats)
     .sort((a, b) => b.timestamp - a.timestamp);
@@ -36,12 +36,12 @@ export async function executeQuickReply(
       chat.unreadCount > 0 ? `  ·  ${chat.unreadCount} não lidas` : '';
     return {
       label: chat.name,
-      description: `[Conta ${chat.accountIndex + 1}]${unreadSuffix}`,
+      description: `[${chat.accountNickname}]${unreadSuffix}`,
       detail: chat.lastMessage
         ? `Última: ${chat.lastMessage.slice(0, 100)}`
         : undefined,
       chatId: chat.id,
-      accountIndex: chat.accountIndex,
+      accountNickname: chat.accountNickname,
     };
   });
 
@@ -62,7 +62,11 @@ export async function executeQuickReply(
 
   if (!text?.trim()) return;
 
-  const targetClient = clients[selected.accountIndex];
+  const targetClient = accountManager.getClient(selected.accountNickname);
+  if (!targetClient) {
+    void vscode.window.showErrorMessage('Conta não encontrada.');
+    return;
+  }
   try {
     await targetClient.sendMessage(selected.chatId, text.trim());
     void vscode.window.showInformationMessage(
@@ -70,8 +74,6 @@ export async function executeQuickReply(
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    void vscode.window.showErrorMessage(
-      `Falha ao enviar mensagem: ${message}`,
-    );
+    void vscode.window.showErrorMessage(`Falha ao enviar mensagem: ${message}`);
   }
 }

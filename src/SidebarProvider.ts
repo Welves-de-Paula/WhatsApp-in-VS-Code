@@ -1,22 +1,18 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { WhatsAppClient } from './WhatsAppClient';
+import { AccountManager } from './AccountManager';
 import { AccountState, HostMessage, WebviewMessage } from './types';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view: vscode.WebviewView | undefined;
-  private initialized = false;
 
   constructor(
-    private readonly clients: WhatsAppClient[],
+    private readonly accountManager: AccountManager,
     private readonly extensionUri: vscode.Uri,
   ) {
-    // Attach event listeners once at construction time.
-    // Updates will be forwarded to the webview whenever _view is available.
-    clients.forEach((client, i) => {
-      client.on('chatsUpdate', () => this.pushChatsUpdate(i));
-      client.on('statusChange', () => this.pushStatusUpdate(i));
-    });
+    // Sempre que a lista de contas ou o estado de alguma conta mudar,
+    // re-envia o estado completo para o webview.
+    accountManager.on('listChanged', () => this.pushFullState());
   }
 
   // -------------------------------------------------------------------------
@@ -42,24 +38,40 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'init':
           this.pushFullState();
           break;
+
         case 'quickReply':
           void vscode.commands.executeCommand('whatsapp.quickReply');
           break;
+
+        case 'addAccount':
+          if (raw.nickname?.trim()) {
+            void this.accountManager.addAccount(raw.nickname.trim()).catch(
+              (err: unknown) => {
+                void this._view?.webview.postMessage({
+                  type: 'addError',
+                  message: (err as Error).message,
+                });
+              },
+            );
+          }
+          break;
+
         case 'reconnect':
-          if (raw.accountIndex === 0) {
-            void vscode.commands.executeCommand('whatsapp.reconnectAccount1');
-          } else {
-            void vscode.commands.executeCommand('whatsapp.reconnectAccount2');
+          if (raw.nickname) {
+            void this.accountManager.reconnectAccount(raw.nickname);
+          }
+          break;
+
+        case 'removeAccount':
+          if (raw.nickname) {
+            void this.handleRemoveAccount(raw.nickname);
           }
           break;
       }
     });
 
-    // Lazy-initialize clients the first time the panel is opened
-    if (!this.initialized) {
-      this.initialized = true;
-      this.initializeClients();
-    }
+    // Envia o estado inicial assim que o painel abre
+    this.pushFullState();
   }
 
   // -------------------------------------------------------------------------
@@ -68,8 +80,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   pushFullState(): void {
     if (!this._view) return;
-    const states: AccountState[] = this.clients.map((c) => ({
-      index: c.accountIndex,
+    const states: AccountState[] = this.accountManager.getClients().map((c) => ({
+      nickname: c.nickname,
       status: c.status,
       chats: c.chats,
     }));
@@ -78,43 +90,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.updateBadge();
   }
 
-  private pushChatsUpdate(accountIndex: number): void {
-    if (!this._view) return;
-    const msg: HostMessage = {
-      type: 'chatsUpdate',
-      accountIndex,
-      chats: this.clients[accountIndex].chats,
-    };
-    void this._view.webview.postMessage(msg);
-    this.updateBadge();
-  }
-
-  private pushStatusUpdate(accountIndex: number): void {
-    if (!this._view) return;
-    const msg: HostMessage = {
-      type: 'statusUpdate',
-      accountIndex,
-      status: this.clients[accountIndex].status,
-    };
-    void this._view.webview.postMessage(msg);
-  }
-
   private updateBadge(): void {
     if (!this._view) return;
-    const total = this.clients.reduce(
-      (sum, c) => sum + c.chats.reduce((s, ch) => s + ch.unreadCount, 0),
-      0,
-    );
+    const total = this.accountManager
+      .getClients()
+      .reduce((sum, c) => sum + c.chats.reduce((s, ch) => s + ch.unreadCount, 0), 0);
     this._view.badge =
       total > 0
         ? { value: total, tooltip: `${total} mensagens não lidas` }
         : undefined;
   }
 
-  private initializeClients(): void {
-    Promise.all(this.clients.map((c) => c.initialize())).catch((err) =>
-      console.error('[WhatsApp Multi] Erro ao inicializar clientes:', err),
+  private async handleRemoveAccount(nickname: string): Promise<void> {
+    const choice = await vscode.window.showWarningMessage(
+      `Remover conta "${nickname}"? Isso apagará a sessão salva.`,
+      { modal: true },
+      'Remover',
     );
+    if (choice === 'Remover') {
+      await this.accountManager.removeAccount(nickname);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -122,16 +117,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   // -------------------------------------------------------------------------
 
   private buildHtml(webview: vscode.Webview): string {
-    const nonce = crypto.randomBytes(16).toString('base64');
+    const nonce = crypto.randomBytes(16).toString('hex');
 
-    // CSP: allow inline scripts/styles (nonce-based), no external resources
     const csp = [
       `default-src 'none'`,
       `style-src 'nonce-${nonce}'`,
       `script-src 'nonce-${nonce}'`,
     ].join('; ');
 
-    void webview; // reserved for future local resource URIs
+    void webview;
 
     return /* html */ `<!DOCTYPE html>
 <html lang="pt-br">
@@ -149,32 +143,126 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       padding: 0 0 8px;
     }
 
-    /* ---- Account section ---- */
-    .section { margin-bottom: 4px; }
-
-    .section-header {
+    /* ---- Toolbar ---- */
+    #toolbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 6px 12px;
-      background: var(--vscode-sideBarSectionHeader-background);
-      border-top: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
-      user-select: none;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
     }
 
-    .section-title {
-      display: flex;
-      align-items: center;
-      gap: 6px;
+    #toolbar-title {
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.6px;
-      color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
+      opacity: 0.7;
     }
 
+    #btn-add {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      padding: 3px 8px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: var(--vscode-font-family);
+    }
+    #btn-add:hover { background: var(--vscode-button-hoverBackground); }
+
+    /* ---- Inline add form ---- */
+    #add-form {
+      display: none;
+      padding: 6px 10px 8px;
+      border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+      background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+    }
+    #add-form label {
+      display: block;
+      font-size: 10px;
+      opacity: 0.7;
+      margin-bottom: 4px;
+    }
+    #add-form-row {
+      display: flex;
+      gap: 4px;
+    }
+    #add-input {
+      flex: 1;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 2px;
+      padding: 3px 6px;
+      font-size: 12px;
+      font-family: var(--vscode-font-family);
+      outline: none;
+    }
+    #add-input:focus { border-color: var(--vscode-focusBorder); }
+    .btn-form {
+      font-size: 11px;
+      padding: 3px 8px;
+      border: none;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: var(--vscode-font-family);
+    }
+    #add-ok {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    #add-ok:hover { background: var(--vscode-button-hoverBackground); }
+    #add-cancel-btn {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+    #add-cancel-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+    #add-error {
+      display: none;
+      color: var(--vscode-inputValidation-errorForeground, #f44336);
+      font-size: 10px;
+      margin-top: 4px;
+    }
+
+    /* ---- Empty state ---- */
+    #empty-state {
+      padding: 24px 16px;
+      text-align: center;
+      font-size: 12px;
+      opacity: 0.6;
+      line-height: 1.6;
+    }
+
+    /* ---- Account section ---- */
+    .section { margin-bottom: 2px; }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      padding: 5px 10px;
+      background: var(--vscode-sideBarSectionHeader-background);
+      border-top: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+      cursor: pointer;
+      user-select: none;
+      gap: 6px;
+    }
+    .section-header:hover { background: var(--vscode-list-hoverBackground); }
+
+    .chevron {
+      font-size: 10px;
+      transition: transform 0.15s;
+      opacity: 0.6;
+      flex-shrink: 0;
+    }
+    .chevron.open { transform: rotate(90deg); }
+
     .dot {
-      width: 8px; height: 8px;
+      width: 7px; height: 7px;
       border-radius: 50%;
       flex-shrink: 0;
       transition: background 0.3s;
@@ -190,25 +278,46 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       50%       { opacity: 0.3; }
     }
 
-    .section-status {
-      font-size: 10px;
-      opacity: 0.65;
+    .section-name {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    /* ---- Connect button ---- */
-    .btn-connect {
+    .section-status {
       font-size: 10px;
-      padding: 2px 7px;
+      opacity: 0.6;
+      flex-shrink: 0;
+    }
+
+    .btn-action {
+      font-size: 10px;
+      padding: 2px 6px;
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
       border: 1px solid var(--vscode-button-border, transparent);
       border-radius: 3px;
       cursor: pointer;
       font-family: var(--vscode-font-family);
+      flex-shrink: 0;
     }
-    .btn-connect:hover {
-      background: var(--vscode-button-secondaryHoverBackground);
+    .btn-action:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+    .btn-remove {
+      background: transparent;
+      border: none;
+      color: var(--vscode-foreground);
+      opacity: 0.45;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 0 2px;
+      line-height: 1;
+      flex-shrink: 0;
     }
+    .btn-remove:hover { opacity: 1; color: #f44336; }
 
     /* ---- Chat list ---- */
     .chat-list { padding: 2px 0; }
@@ -219,17 +328,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       gap: 8px;
       padding: 5px 12px;
       cursor: pointer;
-      border-radius: 0;
     }
     .chat-item:hover { background: var(--vscode-list-hoverBackground); }
 
     .avatar {
-      width: 30px; height: 30px;
+      width: 28px; height: 28px;
       border-radius: 50%;
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
       display: flex; align-items: center; justify-content: center;
-      font-size: 12px; font-weight: 700;
+      font-size: 11px; font-weight: 700;
       flex-shrink: 0;
     }
 
@@ -251,11 +359,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       flex-shrink: 0; min-width: 18px; text-align: center;
     }
 
-    /* ---- State messages ---- */
     .state-msg {
-      padding: 10px 12px;
-      font-size: 11px; opacity: 0.65;
-      text-align: center;
+      padding: 8px 12px;
+      font-size: 11px; opacity: 0.6;
     }
 
     /* ---- Quick Reply bar ---- */
@@ -272,88 +378,96 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   </style>
 </head>
 <body>
+  <div id="toolbar">
+    <span id="toolbar-title">Contas</span>
+    <button id="btn-add">&#xFF0B; Adicionar conta</button>
+  </div>
+  <div id="add-form">
+    <label for="add-input">Apelido da conta</label>
+    <div id="add-form-row">
+      <input id="add-input" type="text" placeholder="Ex: Pessoal, Trabalho\u2026" maxlength="64" autocomplete="off" spellcheck="false">
+      <button id="add-ok" class="btn-form">OK</button>
+      <button id="add-cancel-btn" class="btn-form">&#10005;</button>
+    </div>
+    <div id="add-error"></div>
+  </div>
   <div id="root"></div>
-  <button id="quick-reply" nonce="${nonce}">⚡ Quick Reply  (Ctrl+Alt+W)</button>
+  <button id="quick-reply">&#x26A1; Quick Reply&nbsp;&nbsp;(Ctrl+Alt+W)</button>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
     // ----- State -----
     const state = {
-      accounts: [
-        { index: 0, status: 'disconnected', chats: [] },
-        { index: 1, status: 'disconnected', chats: [] }
-      ]
+      accounts: [],   // AccountState[]
+      expanded: {}    // { [nickname]: boolean }
     };
 
     const STATUS_LABELS = {
       disconnected: 'Desconectado',
-      connecting:   'Conectando…',
-      qr:           'Aguardando QR…',
+      connecting:   'Conectando\u2026',
+      qr:           'Aguardando QR\u2026',
       ready:        'Conectado',
-      error:        'Erro de autenticação'
+      error:        'Erro'
     };
 
     // ----- Sanitize -----
     function esc(str) {
       return String(str ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
 
     function initials(name) {
-      return (name || '?')
-        .split(' ')
-        .slice(0, 2)
-        .map(w => w[0] || '')
-        .join('')
-        .toUpperCase() || '?';
+      return (name || '?').split(' ').slice(0,2)
+        .map(function(w) { return w[0] || ''; }).join('').toUpperCase() || '?';
     }
 
     // ----- Render -----
     function renderAccount(acct) {
-      const dotClass = 'dot dot-' + acct.status;
-      const label = STATUS_LABELS[acct.status] || acct.status;
+      var isExpanded = !!state.expanded[acct.nickname];
+      var dotCls = 'dot dot-' + acct.status;
+      var label = STATUS_LABELS[acct.status] || acct.status;
+      var chevron = '<span class="chevron' + (isExpanded ? ' open' : '') + '">&#9658;</span>';
 
-      const connectBtn = (acct.status === 'disconnected' || acct.status === 'error')
-        ? '<button class="btn-connect" onclick="reconnect(' + acct.index + ')">Conectar</button>'
+      var canConnect = acct.status === 'disconnected' || acct.status === 'error';
+      var connectBtn = canConnect
+        ? '<button class="btn-action" data-action="reconnect" data-nickname="' + esc(acct.nickname) + '">Conectar</button>'
         : '';
 
-      let body;
-      if (acct.status === 'ready' && acct.chats.length > 0) {
-        body = '<div class="chat-list">' +
-          acct.chats.slice(0, 20).map(chat =>
-            '<div class="chat-item" title="' + esc(chat.name) + '">' +
-              '<div class="avatar">' + esc(initials(chat.name)) + '</div>' +
-              '<div class="chat-body">' +
-                '<div class="chat-name">' + esc(chat.name) + '</div>' +
-                (chat.lastMessage
-                  ? '<div class="chat-last">' + esc(chat.lastMessage) + '</div>'
-                  : '') +
-              '</div>' +
-              (chat.unreadCount > 0 ? '<span class="badge">' + chat.unreadCount + '</span>' : '') +
-            '</div>'
-          ).join('') +
-        '</div>';
-      } else if (acct.status === 'ready') {
-        body = '<p class="state-msg">Nenhuma conversa encontrada.</p>';
-      } else {
-        body = '<p class="state-msg">' + esc(label) + '</p>';
+      var removeBtn = '<button class="btn-remove" title="Remover conta" data-action="remove" data-nickname="' + esc(acct.nickname) + '">&#10005;</button>';
+
+      var body = '';
+      if (isExpanded) {
+        if (acct.status === 'ready' && acct.chats.length > 0) {
+          body = '<div class="chat-list">' +
+            acct.chats.slice(0, 20).map(function(chat) {
+              return '<div class="chat-item" title="' + esc(chat.name) + '">' +
+                '<div class="avatar">' + esc(initials(chat.name)) + '</div>' +
+                '<div class="chat-body">' +
+                  '<div class="chat-name">' + esc(chat.name) + '</div>' +
+                  (chat.lastMessage ? '<div class="chat-last">' + esc(chat.lastMessage) + '</div>' : '') +
+                '</div>' +
+                (chat.unreadCount > 0 ? '<span class="badge">' + chat.unreadCount + '</span>' : '') +
+              '</div>';
+            }).join('') +
+          '</div>';
+        } else if (acct.status === 'ready') {
+          body = '<p class="state-msg">Nenhuma conversa encontrada.</p>';
+        } else {
+          body = '<p class="state-msg">' + esc(label) + '</p>';
+        }
       }
 
       return (
-        '<div class="section">' +
+        '<div class="section" data-nickname="' + esc(acct.nickname) + '">' +
           '<div class="section-header">' +
-            '<span class="section-title">' +
-              '<span class="' + dotClass + '"></span>' +
-              'Conta ' + (acct.index + 1) +
-            '</span>' +
-            '<span style="display:flex;align-items:center;gap:6px;">' +
-              '<span class="section-status">' + esc(label) + '</span>' +
-              connectBtn +
-            '</span>' +
+            chevron +
+            '<span class="' + dotCls + '"></span>' +
+            '<span class="section-name">' + esc(acct.nickname) + '</span>' +
+            '<span class="section-status">' + esc(label) + '</span>' +
+            connectBtn +
+            removeBtn +
           '</div>' +
           body +
         '</div>'
@@ -361,39 +475,124 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     function render() {
-      document.getElementById('root').innerHTML =
-        state.accounts.map(renderAccount).join('');
+      var root = document.getElementById('root');
+      if (state.accounts.length === 0) {
+        root.innerHTML = '<div id="empty-state">Nenhuma conta adicionada.<br>Clique em <strong>+ Adicionar conta</strong> para come\u00e7ar.</div>';
+      } else {
+        root.innerHTML = state.accounts.map(renderAccount).join('');
+      }
     }
 
-    // ----- Actions -----
-    function reconnect(idx) {
-      vscode.postMessage({ command: 'reconnect', accountIndex: idx });
+    // ----- Actions (event delegation — sem onclick inline para respeitar CSP) -----
+    document.getElementById('root').addEventListener('click', function(e) {
+      var target = e.target;
+
+      // Botão "Remover" (×)
+      var removeBtn = target.closest('[data-action="remove"]');
+      if (removeBtn) {
+        e.stopPropagation();
+        vscode.postMessage({ command: 'removeAccount', nickname: removeBtn.dataset.nickname });
+        return;
+      }
+
+      // Botão "Conectar"
+      var connectBtn = target.closest('[data-action="reconnect"]');
+      if (connectBtn) {
+        e.stopPropagation();
+        vscode.postMessage({ command: 'reconnect', nickname: connectBtn.dataset.nickname });
+        return;
+      }
+
+      // Clique no cabeçalho da seção → expandir/recolher
+      var header = target.closest('.section-header');
+      if (header) {
+        var section = header.closest('[data-nickname]');
+        if (section) {
+          var nickname = section.dataset.nickname;
+          state.expanded[nickname] = !state.expanded[nickname];
+          render();
+        }
+      }
+    });
+
+    // ---- Inline add-account form ----
+    var addForm = document.getElementById('add-form');
+    var addInput = document.getElementById('add-input');
+    var addError = document.getElementById('add-error');
+
+    document.getElementById('btn-add').addEventListener('click', function() {
+      addForm.style.display = addForm.style.display === 'block' ? 'none' : 'block';
+      if (addForm.style.display === 'block') {
+        addInput.value = '';
+        addError.style.display = 'none';
+        addInput.focus();
+      }
+    });
+
+    function submitAdd() {
+      var val = addInput.value.trim();
+      if (!val) {
+        addError.textContent = 'O apelido n\u00e3o pode estar em branco.';
+        addError.style.display = 'block';
+        return;
+      }
+      var exists = state.accounts.some(function(a) { return a.nickname === val; });
+      if (exists) {
+        addError.textContent = 'J\u00e1 existe uma conta com esse apelido.';
+        addError.style.display = 'block';
+        return;
+      }
+      addForm.style.display = 'none';
+      addInput.value = '';
+      addError.style.display = 'none';
+      vscode.postMessage({ command: 'addAccount', nickname: val });
     }
 
-    document.getElementById('quick-reply').addEventListener('click', () => {
+    document.getElementById('add-ok').addEventListener('click', submitAdd);
+    document.getElementById('add-cancel-btn').addEventListener('click', function() {
+      addForm.style.display = 'none';
+      addInput.value = '';
+      addError.style.display = 'none';
+    });
+    addInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { submitAdd(); }
+      if (e.key === 'Escape') { document.getElementById('add-cancel-btn').click(); }
+    });
+
+    document.getElementById('quick-reply').addEventListener('click', function() {
       vscode.postMessage({ command: 'quickReply' });
     });
 
     // ----- Message bus -----
-    window.addEventListener('message', (event) => {
-      const msg = event.data;
+    window.addEventListener('message', function(event) {
+      var msg = event.data;
       switch (msg.type) {
         case 'fullState':
           state.accounts = msg.states;
           render();
           break;
-        case 'chatsUpdate':
-          state.accounts[msg.accountIndex].chats = msg.chats;
-          render();
+        case 'chatsUpdate': {
+          var acct = state.accounts.find(function(a) { return a.nickname === msg.nickname; });
+          if (acct) { acct.chats = msg.chats; render(); }
           break;
-        case 'statusUpdate':
-          state.accounts[msg.accountIndex].status = msg.status;
-          render();
+        }
+        case 'statusUpdate': {
+          var a = state.accounts.find(function(x) { return x.nickname === msg.nickname; });
+          if (a) { a.status = msg.status; render(); }
           break;
+        }
+        case 'addError': {
+          var errEl = document.getElementById('add-error');
+          errEl.textContent = msg.message;
+          errEl.style.display = 'block';
+          var form = document.getElementById('add-form');
+          form.style.display = 'block';
+          break;
+        }
       }
     });
 
-    // Request initial snapshot
+    // Solicita estado inicial
     vscode.postMessage({ command: 'init' });
   </script>
 </body>

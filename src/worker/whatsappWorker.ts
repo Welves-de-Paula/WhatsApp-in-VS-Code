@@ -11,7 +11,7 @@ import * as path from 'path';
 // ---- IPC types ----
 
 type HostToWorkerMsg =
-  | { type: 'initialize'; storagePath: string; accountIndex: number }
+  | { type: 'initialize'; storagePath: string; sessionId: string }
   | { type: 'sendMessage'; chatId: string; text: string }
   | { type: 'destroy' };
 
@@ -69,7 +69,7 @@ let client: any = null;
 
 async function initialize(
   storagePath: string,
-  accountIndex: number,
+  sessionId: string,
 ): Promise<void> {
   fs.mkdirSync(storagePath, { recursive: true });
 
@@ -101,7 +101,7 @@ async function initialize(
 
   client = new Client({
     authStrategy: new LocalAuth({
-      clientId: `conta${accountIndex + 1}`,
+      clientId: sessionId,
       dataPath: storagePath,
     }),
     puppeteer: {
@@ -185,7 +185,7 @@ process.on('message', (raw: unknown) => {
   const msg = raw as HostToWorkerMsg;
   switch (msg.type) {
     case 'initialize':
-      initialize(msg.storagePath, msg.accountIndex).catch((err: Error) => {
+      initialize(msg.storagePath, msg.sessionId).catch((err: Error) => {
         send({ type: 'statusChange', status: 'error' });
         log('error', `initialize: ${err.message}`);
       });

@@ -9,13 +9,13 @@ type WorkerToHostMsg =
   | { type: 'qr'; qr: string }
   | { type: 'ready' }
   | { type: 'statusChange'; status: AccountStatus }
-  | { type: 'chatsUpdate'; chats: Omit<ChatInfo, 'accountIndex'>[] }
+  | { type: 'chatsUpdate'; chats: Omit<ChatInfo, 'accountNickname'>[] }
   | { type: 'message'; from: string; body: string; notifyName?: string }
   | { type: 'sendResult'; success: boolean; error?: string }
   | { type: 'log'; level: 'info' | 'error'; message: string };
 
 type HostToWorkerMsg =
-  | { type: 'initialize'; storagePath: string; accountIndex: number }
+  | { type: 'initialize'; storagePath: string; sessionId: string }
   | { type: 'sendMessage'; chatId: string; text: string }
   | { type: 'destroy' };
 
@@ -44,7 +44,7 @@ export interface WWebMessage {
 }
 
 export class WhatsAppClient extends EventEmitter {
-  public readonly accountIndex: number;
+  public readonly nickname: string;
   public status: AccountStatus = 'disconnected';
   public chats: ChatInfo[] = [];
 
@@ -57,9 +57,9 @@ export class WhatsAppClient extends EventEmitter {
     (result: { success: boolean; error?: string }) => void
   > = [];
 
-  constructor(accountIndex: number, storagePath: string) {
+  constructor(nickname: string, storagePath: string) {
     super();
-    this.accountIndex = accountIndex;
+    this.nickname = nickname;
     this.storagePath = storagePath;
   }
 
@@ -82,10 +82,10 @@ export class WhatsAppClient extends EventEmitter {
       });
 
       this.worker.stdout?.on('data', (d: Buffer) =>
-        console.log(`[WA Worker ${this.accountIndex + 1}]`, d.toString().trimEnd()),
+        console.log(`[WA Worker "${this.nickname}"]`, d.toString().trimEnd()),
       );
       this.worker.stderr?.on('data', (d: Buffer) =>
-        console.error(`[WA Worker ${this.accountIndex + 1}]`, d.toString().trimEnd()),
+        console.error(`[WA Worker "${this.nickname}"]`, d.toString().trimEnd()),
       );
 
       this.worker.on('message', (raw: unknown) =>
@@ -93,7 +93,7 @@ export class WhatsAppClient extends EventEmitter {
       );
 
       this.worker.on('error', (err) => {
-        console.error(`[WA Worker ${this.accountIndex + 1}] erro:`, err);
+        console.error(`[WA Worker "${this.nickname}"] erro:`, err);
         this.worker = null;
         this.isInitializing = false;
         this.setStatus('error');
@@ -101,7 +101,7 @@ export class WhatsAppClient extends EventEmitter {
 
       this.worker.on('exit', (code, signal) => {
         console.log(
-          `[WA Worker ${this.accountIndex + 1}] encerrado — código: ${code} sinal: ${signal}`,
+          `[WA Worker "${this.nickname}"] encerrado — código: ${code} sinal: ${signal}`,
         );
         this.worker = null;
         this.isInitializing = false;
@@ -121,7 +121,7 @@ export class WhatsAppClient extends EventEmitter {
       this.sendToWorker({
         type: 'initialize',
         storagePath: this.storagePath,
-        accountIndex: this.accountIndex,
+        sessionId: this.nickname,
       });
     } finally {
       this.isInitializing = false;
@@ -130,7 +130,7 @@ export class WhatsAppClient extends EventEmitter {
 
   async sendMessage(chatId: string, text: string): Promise<void> {
     if (!this.worker || this.status !== 'ready') {
-      throw new Error(`Conta ${this.accountIndex + 1} não está conectada.`);
+      throw new Error(`Conta "${this.nickname}" não está conectada.`);
     }
 
     return new Promise((resolve, reject) => {
@@ -151,7 +151,7 @@ export class WhatsAppClient extends EventEmitter {
     // Aguarda o processo encerrar (máx. 8 s) antes de forçar kill
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        console.warn(`[WA Worker ${this.accountIndex + 1}] forçando encerramento.`);
+        console.warn(`[WA Worker "${this.nickname}"] forçando encerramento.`);
         this.worker?.kill('SIGKILL');
         resolve();
       }, 8000);
@@ -191,7 +191,7 @@ export class WhatsAppClient extends EventEmitter {
       case 'chatsUpdate':
         this.chats = msg.chats.map((c) => ({
           ...c,
-          accountIndex: this.accountIndex,
+          accountNickname: this.nickname,
         }));
         this.emit('chatsUpdate', this.chats);
         break;
@@ -214,9 +214,9 @@ export class WhatsAppClient extends EventEmitter {
 
       case 'log':
         if (msg.level === 'error') {
-          console.error(`[WA Worker ${this.accountIndex + 1}]`, msg.message);
+          console.error(`[WA Worker "${this.nickname}"]`, msg.message);
         } else {
-          console.log(`[WA Worker ${this.accountIndex + 1}]`, msg.message);
+          console.log(`[WA Worker "${this.nickname}"]`, msg.message);
         }
         break;
     }

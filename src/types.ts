@@ -5,30 +5,34 @@ export type AccountStatus =
   | 'ready'
   | 'error';
 
+export interface AccountMeta {
+  nickname: string;
+}
+
 export interface ChatInfo {
   id: string;
   name: string;
   lastMessage: string;
   timestamp: number;
   unreadCount: number;
-  accountIndex: number;
+  accountNickname: string;
 }
 
 export interface AccountState {
-  index: number;
+  nickname: string;
   status: AccountStatus;
   chats: ChatInfo[];
 }
 
 export interface WebviewMessage {
-  command: 'init' | 'quickReply' | 'reconnect';
-  accountIndex?: number;
+  command: 'init' | 'quickReply' | 'reconnect' | 'addAccount' | 'removeAccount';
+  nickname?: string;
 }
 
 export interface HostMessage {
   type: 'fullState' | 'chatsUpdate' | 'statusUpdate';
   states?: AccountState[];
-  accountIndex?: number;
+  nickname?: string;
   chats?: ChatInfo[];
   status?: AccountStatus;
 }
