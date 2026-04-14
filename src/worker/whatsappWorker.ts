@@ -75,6 +75,9 @@ function findSystemChrome(): string | undefined {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any = null;
+/** Cache de todos os chats carregados — evita chamar getChats() repetidamente */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cachedAllChats: any[] = [];
 const recentIncomingMessageIds: string[] = [];
 
 /** Debounce para evitar chamadas duplas de loadChats (message + message_create) */
@@ -216,6 +219,7 @@ async function loadChats(): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawChats: any[] = await client.getChats();
+    cachedAllChats = rawChats; // mantém cache completo para getMessages
     const filteredChats = rawChats.filter((chat: any) => {
       const isPinned = chat.pinned === true || chat.pin === 1;
       // Filter out archived chats (keep pinned ones)
@@ -292,28 +296,48 @@ process.on('message', (raw: unknown) => {
       }
       (async () => {
         try {
-          // getChatById retorna um objeto "leve" que pode falhar em fetchMessages.
-          // Buscar via getChats() garante que o chat está totalmente inicializado
-          // no contexto interno do WhatsApp Web.
           log('info', `Buscando mensagens do chat: ${msg.chatId}`);
+
+          // fetchMessages() chama internamente ConversationMsgs.loadEarlierMsgs →
+          // waitForChatLoading, que falha quando o chat não está ativo na página.
+          // Solução: ler diretamente do window.Store via pupPage.evaluate,
+          // sem tentar carregar mensagens antigas nem navegar.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const allChats: any[] = await client.getChats();
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const chat = allChats.find((c: any) => c.id._serialized === msg.chatId);
-          if (!chat) {
-            throw new Error('Chat não encontrado.');
+          const page: any = client.pupPage ?? client.page;
+          if (!page) throw new Error('Página do navegador não disponível.');
+
+          type RawMsg = { id: string; body: string; fromMe: boolean; timestamp: number; sender: string };
+          type EvalResult = RawMsg[] | { error: string };
+
+          const result: EvalResult = await page.evaluate((chatId: string): EvalResult => {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const w = window as any;
+              const chat = w.Store?.Chat?.get?.(chatId);
+              if (!chat) return { error: 'Chat não encontrado no store.' };
+
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const models: any[] = chat.msgs?._models ?? chat.msgs?.models ?? [];
+              if (!Array.isArray(models)) return { error: 'Estrutura de mensagens inesperada.' };
+
+              return models.slice(-50).map((m) => ({
+                id: (m.id?._serialized ?? m.id?.id ?? '') as string,
+                body: (m.body ?? '') as string,
+                fromMe: !!(m.id?.fromMe ?? m.fromMe),
+                timestamp: (m.t ?? m.timestamp ?? 0) as number,
+                sender: (m._data?.notifyName ?? m.author?.replace(/@\w+\.us$/, '') ?? '') as string,
+              }));
+            } catch (e) {
+              return { error: (e as Error).message };
+            }
+          }, msg.chatId);
+
+          if (!Array.isArray(result)) {
+            throw new Error(result.error ?? 'Erro desconhecido ao ler mensagens.');
           }
-          const rawMessages = await chat.fetchMessages({ limit: 50 });
-          log('info', `Mensagens obtidas: ${rawMessages.length}`);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const messages = rawMessages.map((m: any) => ({
-            id: m.id._serialized as string,
-            body: (m.body as string) || '',
-            fromMe: m.fromMe as boolean,
-            timestamp: m.timestamp as number,
-            sender: (m._data?.notifyName as string | undefined) || (m.from as string | undefined)?.replace(/@[cg]\.us$/, '') || '',
-          }));
-          send({ type: 'sendResult', requestId: msg.requestId, success: true, messages });
+
+          log('info', `Mensagens obtidas: ${result.length}`);
+          send({ type: 'sendResult', requestId: msg.requestId, success: true, messages: result });
         } catch (err) {
           send({
             type: 'sendResult',

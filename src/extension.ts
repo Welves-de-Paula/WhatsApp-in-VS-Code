@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AccountManager } from './AccountManager';
 import { SidebarProvider } from './SidebarProvider';
 import { NotificationManager } from './notificationManager';
@@ -6,11 +8,62 @@ import { NotificationSettingsPanel } from './NotificationSettingsPanel';
 import { executeQuickReply, executeOpenChat } from './quickReply';
 
 let accountManager: AccountManager | undefined;
+let lockFilePath: string | undefined;
+
+// ---------------------------------------------------------------------------
+// Multi-window lock — garante que apenas uma janela do VS Code executa workers
+// ---------------------------------------------------------------------------
+
+function acquireLock(storagePath: string): boolean {
+  lockFilePath = path.join(storagePath, 'instance.lock');
+
+  try {
+    fs.mkdirSync(storagePath, { recursive: true });
+
+    // Tenta ler lock existente
+    let existingPid: number | undefined;
+    try {
+      existingPid = parseInt(fs.readFileSync(lockFilePath, 'utf8').trim(), 10);
+    } catch {
+      // arquivo não existe — podemos assumir o lock
+    }
+
+    if (existingPid !== undefined && !isNaN(existingPid)) {
+      try {
+        // kill(pid, 0) não mata nada, só verifica se o processo existe
+        process.kill(existingPid, 0);
+        // Processo ainda vivo → outra janela tem o lock
+        return false;
+      } catch {
+        // Processo morto → lock obsoleto, podemos sobrescrever
+      }
+    }
+
+    fs.writeFileSync(lockFilePath, String(process.pid), 'utf8');
+    return true;
+  } catch {
+    // Falha ao escrever o lock → não bloqueia, assume proprietário
+    return true;
+  }
+}
+
+function releaseLock(): void {
+  if (!lockFilePath) return;
+  try {
+    const content = fs.readFileSync(lockFilePath, 'utf8').trim();
+    if (parseInt(content, 10) === process.pid) {
+      fs.unlinkSync(lockFilePath);
+    }
+  } catch {
+    // ignora se o arquivo já não existe
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Activate
+// ---------------------------------------------------------------------------
 
 export function activate(context: vscode.ExtensionContext): void {
-  // ------------------------------------------------------------------
-  // AccountManager — sem nenhum Puppeteer na inicialização
-  // ------------------------------------------------------------------
   accountManager = new AccountManager(context, context.extensionUri);
 
   // ------------------------------------------------------------------
@@ -114,14 +167,23 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // ------------------------------------------------------------------
-  // Reconecta contas salvas em background (sem bloquear a ativação)
+  // Multi-window lock: só a janela proprietária inicia workers
   // ------------------------------------------------------------------
-  accountManager.initializeAll().catch((err: unknown) =>
-    console.error('[WhatsApp Multi] Erro ao reconectar contas salvas:', (err as Error).message),
-  );
+  const isOwner = acquireLock(context.globalStorageUri.fsPath);
+
+  if (isOwner) {
+    accountManager.initializeAll().catch((err: unknown) =>
+      console.error('[WhatsApp Multi] Erro ao reconectar contas salvas:', (err as Error).message),
+    );
+  } else {
+    void vscode.window.showInformationMessage(
+      'WhatsApp Multi: já está ativo em outra janela do VS Code. ' +
+      'Os workers não foram iniciados aqui para evitar conflitos de sessão.',
+    );
+  }
 }
 
 export async function deactivate(): Promise<void> {
+  releaseLock();
   await accountManager?.destroyAll();
 }
-

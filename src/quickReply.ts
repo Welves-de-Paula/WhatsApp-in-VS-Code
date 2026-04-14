@@ -8,8 +8,15 @@ interface ChatPickItem extends vscode.QuickPickItem {
   accountNickname: string;
 }
 
-let chatPanel: vscode.WebviewPanel | undefined;
-let currentChatInfo: { chatId: string; chatName: string; accountNickname: string } | undefined;
+/**
+ * Mapa de painéis abertos, indexado por chatId.
+ * Evita abrir painéis duplicados e libera memória quando fechados.
+ */
+const chatPanels = new Map<string, vscode.WebviewPanel>();
+
+// ---------------------------------------------------------------------------
+// Public entry points
+// ---------------------------------------------------------------------------
 
 export async function executeQuickReply(
   accountManager: AccountManager,
@@ -68,17 +75,40 @@ export async function executeQuickReply(
   if (!action) return;
 
   if (action.label.includes('Ver')) {
-    await showChatMessages(accountManager, selected.chatId, selected.accountNickname, selected.label, extensionUri);
+    await openChatPanel(accountManager, selected.chatId, selected.label, selected.accountNickname, extensionUri);
   } else {
     await sendReply(accountManager, selected.chatId, selected.accountNickname, selected.label, selected.description);
   }
 }
 
-async function showChatMessages(
+export async function executeOpenChat(
   accountManager: AccountManager,
   chatId: string,
-  accountNickname: string,
   chatName: string,
+  accountNickname: string,
+  extensionUri: vscode.Uri,
+): Promise<void> {
+  const client = accountManager.getClient(accountNickname);
+  if (!client) {
+    void vscode.window.showErrorMessage('Conta não encontrada.');
+    return;
+  }
+  if (client.status !== 'ready') {
+    void vscode.window.showWarningMessage('Conta não conectada.');
+    return;
+  }
+  await openChatPanel(accountManager, chatId, chatName, accountNickname, extensionUri);
+}
+
+// ---------------------------------------------------------------------------
+// Panel management — um painel por chatId, reutilizado em aberturas seguintes
+// ---------------------------------------------------------------------------
+
+async function openChatPanel(
+  accountManager: AccountManager,
+  chatId: string,
+  chatName: string,
+  accountNickname: string,
   extensionUri: vscode.Uri,
 ): Promise<void> {
   const client = accountManager.getClient(accountNickname);
@@ -87,28 +117,144 @@ async function showChatMessages(
     return;
   }
 
+  // Reutiliza painel já aberto para este chat
+  const existing = chatPanels.get(chatId);
+  if (existing) {
+    existing.reveal(vscode.ViewColumn.One);
+    // Recarrega mensagens no painel existente
+    existing.webview.html = generateLoadingHtml(chatName);
+    try {
+      const messages = await client.getChatMessages(chatId);
+      if (chatPanels.get(chatId) === existing) {
+        existing.webview.html = generateChatHtml(existing.webview, messages, chatName, chatId, accountNickname);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      void vscode.window.showErrorMessage(`Erro ao carregar mensagens: ${message}`);
+    }
+    return;
+  }
+
+  // Cria novo painel
+  const panel = vscode.window.createWebviewPanel(
+    'whatsappChat',
+    `${chatName} - WhatsApp`,
+    vscode.ViewColumn.One,
+    { enableScripts: true, localResourceRoots: [extensionUri] },
+  );
+
+  chatPanels.set(chatId, panel);
+  panel.onDidDispose(() => chatPanels.delete(chatId));
+  registerChatWebviewHandler(panel, accountManager, { accountNickname, chatId });
+
+  panel.webview.html = generateLoadingHtml(chatName);
+
   try {
     const messages = await client.getChatMessages(chatId);
-
-    if (messages.length === 0) {
-      void vscode.window.showInformationMessage('Nenhuma mensagem nesta conversa.');
-      return;
+    // Verifica se o painel ainda existe (pode ter sido fechado durante o await)
+    if (chatPanels.get(chatId) === panel) {
+      panel.webview.html = generateChatHtml(panel.webview, messages, chatName, chatId, accountNickname);
     }
-
-    const panel = vscode.window.createWebviewPanel(
-      `chat-${chatId}`,
-      `${chatName} - WhatsApp`,
-      vscode.ViewColumn.One,
-      { enableScripts: true, localResourceRoots: [extensionUri] },
-    );
-    registerChatWebviewHandler(panel, accountManager, { accountNickname, chatId });
-
-    panel.webview.html = generateChatHtml(panel.webview, messages, chatName, chatId, accountNickname);
-
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     void vscode.window.showErrorMessage(`Erro ao carregar mensagens: ${message}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// WebviewPanel message handler
+// ---------------------------------------------------------------------------
+
+function registerChatWebviewHandler(
+  panel: vscode.WebviewPanel,
+  accountManager: AccountManager,
+  context: { accountNickname: string; chatId: string },
+): void {
+  panel.webview.onDidReceiveMessage(async (raw: { command?: string; chatId?: string; text?: string }) => {
+    if (raw.command !== 'sendMessage') return;
+
+    const chatId = raw.chatId?.trim();
+    const text = raw.text?.trim();
+
+    if (!chatId || !text) {
+      void panel.webview.postMessage({ command: 'messageSent', success: false, error: 'Chat ou mensagem inválida.' });
+      return;
+    }
+
+    if (chatId !== context.chatId) {
+      void panel.webview.postMessage({ command: 'messageSent', success: false, error: 'Conversa ativa mudou. Abra a conversa novamente.' });
+      return;
+    }
+
+    const client = accountManager.getClient(context.accountNickname);
+    if (!client) {
+      void panel.webview.postMessage({ command: 'messageSent', success: false, error: 'Conta não encontrada para esta conversa.' });
+      return;
+    }
+
+    try {
+      await client.sendMessage(chatId, text);
+      void panel.webview.postMessage({ command: 'messageSent', success: true });
+    } catch (err: unknown) {
+      void panel.webview.postMessage({
+        command: 'messageSent',
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Quick reply (send only, sem abrir painel)
+// ---------------------------------------------------------------------------
+
+async function sendReply(
+  accountManager: AccountManager,
+  chatId: string,
+  accountNickname: string,
+  chatName: string,
+  chatDescription: string | undefined,
+): Promise<void> {
+  const text = await vscode.window.showInputBox({
+    prompt: `Responder para ${chatName} (${chatDescription?.trim()})`,
+    placeHolder: 'Digite sua mensagem…',
+    validateInput: (value) =>
+      value.trim() ? null : 'A mensagem não pode estar em branco.',
+  });
+
+  if (!text?.trim()) return;
+
+  const targetClient = accountManager.getClient(accountNickname);
+  if (!targetClient) {
+    void vscode.window.showErrorMessage('Conta não encontrada.');
+    return;
+  }
+  try {
+    await targetClient.sendMessage(chatId, text.trim());
+    void vscode.window.showInformationMessage(`Mensagem enviada para ${chatName}`);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    void vscode.window.showErrorMessage(`Falha ao enviar mensagem: ${message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HTML helpers
+// ---------------------------------------------------------------------------
+
+function generateLoadingHtml(chatName: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: var(--vscode-font-family); padding: 20px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); text-align: center; }
+  </style>
+</head>
+<body>
+  <p>Carregando ${escapeHtml(chatName)}...</p>
+</body>
+</html>`;
 }
 
 function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chatName: string, chatId: string, accountNickname: string): string {
@@ -123,7 +269,7 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
     const time = new Date(msg.timestamp * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const fromMeClass = msg.fromMe ? 'from-me' : 'from-them';
     const senderLabel = msg.fromMe ? 'Você' : msg.sender;
-    
+
     return `
       <div class="message ${fromMeClass}">
         <div class="message-content">${escapeHtml(msg.body)}</div>
@@ -263,11 +409,9 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const currentChatId = document.body.dataset.chatId || '';
-    void document.body.dataset.accountNickname;
     let isSending = false;
     let pendingText = '';
-    
-    // Scroll para o final ao abrir
+
     var container = document.getElementById('chat-container');
     container.scrollTop = container.scrollHeight;
 
@@ -277,10 +421,7 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
 
     sendButton.addEventListener('click', sendMessage);
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        sendMessage();
-      }
+      if (e.key === 'Enter') { e.preventDefault(); sendMessage(); }
     });
 
     window.addEventListener('message', (event) => {
@@ -297,10 +438,9 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
         errorEl.textContent = '';
         return;
       }
-
       errorEl.textContent = data.error || 'Falha ao enviar a mensagem.';
     });
-    
+
     function sendMessage() {
       const text = input.value.trim();
       if (!text || isSending || !currentChatId) return;
@@ -332,9 +472,7 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       const timeEl = document.createElement('span');
       timeEl.className = 'time';
       const now = new Date();
-      const hh = String(now.getHours()).padStart(2, '0');
-      const mm = String(now.getMinutes()).padStart(2, '0');
-      timeEl.textContent = hh + ':' + mm;
+      timeEl.textContent = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
 
       metaEl.appendChild(senderEl);
       metaEl.appendChild(timeEl);
@@ -356,163 +494,4 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
-}
-
-async function sendReply(
-  accountManager: AccountManager,
-  chatId: string,
-  accountNickname: string,
-  chatName: string,
-  chatDescription: string | undefined,
-): Promise<void> {
-  const text = await vscode.window.showInputBox({
-    prompt: `Responder para ${chatName} (${chatDescription?.trim()})`,
-    placeHolder: 'Digite sua mensagem…',
-    validateInput: (value) =>
-      value.trim() ? null : 'A mensagem não pode estar em branco.',
-  });
-
-  if (!text?.trim()) return;
-
-  const targetClient = accountManager.getClient(accountNickname);
-  if (!targetClient) {
-    void vscode.window.showErrorMessage('Conta não encontrada.');
-    return;
-  }
-  try {
-    await targetClient.sendMessage(chatId, text.trim());
-    void vscode.window.showInformationMessage(
-      `Mensagem enviada para ${chatName}`,
-    );
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    void vscode.window.showErrorMessage(`Falha ao enviar mensagem: ${message}`);
-  }
-}
-
-export async function executeOpenChat(
-  accountManager: AccountManager,
-  chatId: string,
-  chatName: string,
-  accountNickname: string,
-  extensionUri: vscode.Uri,
-): Promise<void> {
-  const client = accountManager.getClient(accountNickname);
-  if (!client) {
-    void vscode.window.showErrorMessage('Conta não encontrada.');
-    return;
-  }
-
-  if (client.status !== 'ready') {
-    void vscode.window.showWarningMessage('Conta não conectada.');
-    return;
-  }
-
-  // Armazena info do chat atual
-  currentChatInfo = { chatId, chatName, accountNickname };
-
-  // Reutiliza o painel existente ou cria um novo
-  if (!chatPanel) {
-    chatPanel = vscode.window.createWebviewPanel(
-      'whatsappChat',
-      'WhatsApp Chat',
-      vscode.ViewColumn.One,
-      { enableScripts: true, localResourceRoots: [extensionUri] },
-    );
-    registerChatWebviewHandler(chatPanel, accountManager);
-    chatPanel.onDidDispose(() => {
-      chatPanel = undefined;
-      currentChatInfo = undefined;
-    });
-  } else {
-    chatPanel.reveal(vscode.ViewColumn.One);
-  }
-
-  const panel = chatPanel;
-  try {
-    panel.title = `${chatName} - WhatsApp`;
-    panel.webview.html = generateLoadingHtml(chatName);
-
-    const messages = await client.getChatMessages(chatId);
-
-    // O painel pode ter sido fechado durante o await
-    if (chatPanel !== panel) return;
-    panel.webview.html = generateChatHtml(panel.webview, messages, chatName, chatId, accountNickname);
-
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    void vscode.window.showErrorMessage(`Erro ao carregar mensagens: ${message}`);
-  }
-}
-
-function generateLoadingHtml(chatName: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body { font-family: var(--vscode-font-family); padding: 20px; background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); text-align: center; }
-  </style>
-</head>
-<body>
-  <p>Carregando ${escapeHtml(chatName)}...</p>
-</body>
-</html>`;
-}
-
-function registerChatWebviewHandler(
-  panel: vscode.WebviewPanel,
-  accountManager: AccountManager,
-  context?: { accountNickname: string; chatId: string },
-): void {
-  panel.webview.onDidReceiveMessage(async (raw: { command?: string; chatId?: string; text?: string }) => {
-    if (raw.command !== 'sendMessage') {
-      return;
-    }
-
-    const chatId = raw.chatId?.trim();
-    const text = raw.text?.trim();
-    const activeChatInfo = currentChatInfo;
-    const expectedChatId = context?.chatId ?? activeChatInfo?.chatId;
-
-    if (!chatId || !text) {
-      void panel.webview.postMessage({
-        command: 'messageSent',
-        success: false,
-        error: 'Chat ou mensagem inválida.',
-      });
-      return;
-    }
-
-    if (expectedChatId && expectedChatId !== chatId) {
-      void panel.webview.postMessage({
-        command: 'messageSent',
-        success: false,
-        error: 'Conversa ativa mudou. Abra a conversa novamente.',
-      });
-      return;
-    }
-
-    const accountNickname = context?.accountNickname ?? activeChatInfo?.accountNickname ?? '';
-    const client = accountManager.getClient(accountNickname);
-    if (!client) {
-      void panel.webview.postMessage({
-        command: 'messageSent',
-        success: false,
-        error: 'Conta não encontrada para esta conversa.',
-      });
-      return;
-    }
-
-    try {
-      await client.sendMessage(chatId, text);
-      void panel.webview.postMessage({ command: 'messageSent', success: true });
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      void panel.webview.postMessage({
-        command: 'messageSent',
-        success: false,
-        error: errorMessage,
-      });
-    }
-  });
 }
