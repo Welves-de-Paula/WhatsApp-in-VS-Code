@@ -305,31 +305,6 @@ export class NotificationSettingsPanel {
     </div>
   </section>
 
-  <!-- ---- Filtros ---- -->
-  <section>
-    <div class="section-title">Filtros</div>
-
-    <div class="field">
-      <label for="sel-filter">Notificar</label>
-      <select id="sel-filter">
-        ${sel('all', s.filter, 'Todas as mensagens')}
-        ${sel('direct', s.filter, 'Somente mensagens diretas')}
-        ${sel('groups', s.filter, 'Somente grupos')}
-      </select>
-    </div>
-
-    <div style="margin-bottom:10px;">
-      <label style="font-size:12px;display:block;margin-bottom:4px;">Contatos silenciados</label>
-      <textarea id="inp-muted-contacts" placeholder="Um nome por linha">${escapeHtml(mutedContactsVal)}</textarea>
-      <p class="hint">Um contato por linha. O nome deve coincidir exatamente com o exibido na conversa.</p>
-    </div>
-
-    <div>
-      <label style="font-size:12px;display:block;margin-bottom:4px;">Grupos silenciados</label>
-      <textarea id="inp-muted-groups" placeholder="Um nome por linha">${escapeHtml(mutedGroupsVal)}</textarea>
-      <p class="hint">Um grupo por linha.</p>
-    </div>
-  </section>
 
   <div class="actions">
     <button class="btn-save" id="btn-save">Salvar</button>
