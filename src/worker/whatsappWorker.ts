@@ -154,10 +154,23 @@ function forwardIncomingMessage(msg: any): void {
       (msg?._data as { pushname?: string } | undefined)?.pushname ||
       undefined;
 
+    // Bloqueia notificação se o chat estiver silenciado.
+    // Fallback: se o chat não estiver no cache, permite a mensagem.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cachedChat = cachedAllChats.find((c: any) => (c.id?._serialized ?? c.id) === from);
+    if (cachedChat !== undefined) {
+      const exp = (cachedChat.muteExpiration as number | undefined) ?? 0;
+      const now = Math.floor(Date.now() / 1000);
+      const isMuted =
+        (cachedChat.isMuted as boolean | undefined) === true ||
+        exp < 0 ||
+        exp > now;
+      if (isMuted) return;
+    }
+
     const isGroupMsg = from.endsWith('@g.us');
     const groupName: string | undefined = isGroupMsg
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ? ((cachedAllChats.find((c: any) => (c.id?._serialized ?? c.id) === from)?.name) as string | undefined)
+      ? (cachedChat?.name as string | undefined)
       : undefined;
 
     send({
