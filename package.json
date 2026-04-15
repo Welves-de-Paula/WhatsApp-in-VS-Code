@@ -1,93 +1,93 @@
 {
-    "name":  "whatsapp-vscode",
-    "displayName":  "WhatsApp VSCode",
-    "description":  "Gerencie contas do WhatsApp direto no VS Code com notificaÃƒÂ§ÃƒÂµes e quick reply",
-    "version":  "0.1.5",
-    "publisher":  "local",
-    "engines":  {
-                    "vscode":  "^1.80.0"
-                },
-    "extensionKind":  [
-                          "ui",
-                          "workspace"
-                      ],
-    "categories":  [
-                       "Other"
-                   ],
-    "activationEvents":  [
-                             "onView:whatsappVsCode.sidebar",
-                             "onCommand:whatsapp.quickReply",
-                             "onCommand:whatsapp.addAccount",
-                             "onCommand:whatsapp.removeAccount",
-                             "onCommand:whatsapp.openChat",
-                             "onCommand:whatsapp.openNotificationSettings"
-                         ],
-    "main":  "./out/extension.js",
-    "contributes":  {
-                        "commands":  [
-                                         {
-                                             "command":  "whatsapp.quickReply",
-                                             "title":  "WhatsApp: Quick Reply",
-                                             "icon":  "$(reply)"
-                                         },
-                                         {
-                                             "command":  "whatsapp.addAccount",
-                                             "title":  "WhatsApp: Adicionar Conta",
-                                             "icon":  "$(add)"
-                                         },
-                                         {
-                                             "command":  "whatsapp.removeAccount",
-                                             "title":  "WhatsApp: Remover Conta"
-                                         },
-                                         {
-                                             "command":  "whatsapp.openChat",
-                                             "title":  "WhatsApp: Abrir Conversa"
-                                         },
-                                         {
-                                             "command":  "whatsapp.openNotificationSettings",
-                                             "title":  "WhatsApp: Configurar NotificaÃƒÂ§ÃƒÂµes"
-                                         }
-                                     ],
-                        "keybindings":  [
-                                            {
-                                                "command":  "whatsapp.quickReply",
-                                                "key":  "ctrl+alt+w",
-                                                "mac":  "cmd+alt+w"
-                                            }
-                                        ],
-                        "viewsContainers":  {
-                                                "activitybar":  [
-                                                                    {
-                                                                        "id":  "whatsapp-vscode",
-                                                                        "title":  "WhatsApp",
-                                                                        "icon":  "media/whatsapp.svg"
-                                                                    }
-                                                                ]
-                                            },
-                        "views":  {
-                                      "whatsapp-vscode":  [
-                                                              {
-                                                                  "type":  "webview",
-                                                                  "id":  "whatsappVsCode.sidebar",
-                                                                  "name":  "WhatsApp"
-                                                              }
-                                                          ]
-                                  }
-                    },
-    "scripts":  {
-                    "vscode:prepublish":  "npm run compile",
-                    "compile":  "tsc -p ./",
-                    "watch":  "tsc -watch -p ./",
-                    "package":  "vsce package --no-dependencies"
-                },
-    "dependencies":  {
-                         "qrcode":  "^1.5.3",
-                         "whatsapp-web.js":  "^1.23.0"
-                     },
-    "devDependencies":  {
-                            "@types/node":  "^18.0.0",
-                            "@types/qrcode":  "^1.5.0",
-                            "@types/vscode":  "^1.80.0",
-                            "typescript":  "^5.0.0"
-                        }
+  "name": "whatsapp-vscode",
+  "displayName": "WhatsApp VSCode",
+  "description": "Gerencie contas do WhatsApp direto no VS Code",
+  "version": "0.1.5",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:whatsappVsCode.sidebar",
+    "onCommand:whatsapp.quickReply",
+    "onCommand:whatsapp.addAccount",
+    "onCommand:whatsapp.removeAccount",
+    "onCommand:whatsapp.openChat",
+    "onCommand:whatsapp.openNotificationSettings"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "whatsapp.quickReply",
+        "title": "WhatsApp: Quick Reply",
+        "icon": "$(reply)"
+      },
+      {
+        "command": "whatsapp.addAccount",
+        "title": "WhatsApp: Adicionar Conta",
+        "icon": "$(add)"
+      },
+      {
+        "command": "whatsapp.removeAccount",
+        "title": "WhatsApp: Remover Conta"
+      },
+      {
+        "command": "whatsapp.openChat",
+        "title": "WhatsApp: Abrir Conversa"
+      },
+      {
+        "command": "whatsapp.openNotificationSettings",
+        "title": "WhatsApp: Configurar NotificaÃƒÂ§ÃƒÂµes"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "whatsapp.quickReply",
+        "key": "ctrl+alt+w",
+        "mac": "cmd+alt+w"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "whatsapp-vscode",
+          "title": "WhatsApp",
+          "icon": "media/whatsapp.svg"
+        }
+      ]
+    },
+    "views": {
+      "whatsapp-vscode": [
+        {
+          "type": "webview",
+          "id": "whatsappVsCode.sidebar",
+          "name": "WhatsApp"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/qrcode": "^1.5.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
 }

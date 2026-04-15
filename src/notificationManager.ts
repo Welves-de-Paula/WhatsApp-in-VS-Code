@@ -66,8 +66,9 @@ export class NotificationManager {
     // – grupo   : nome do grupo (buscado no cache de chats) — o sender é o membro,
     //             não o grupo, então não serve para comparar com mutedGroups
     const client = this.accountManager.getClient(nickname);
+    // Preferência: nome vindo direto do worker (cachedAllChats) → cache local → JID bruto
     const chatName = isGroup
-      ? (client?.chats.find(c => c.id === msg.from)?.name ?? msg.from.replace(/@g\.us$/, ''))
+      ? (msg.chatName ?? client?.chats.find(c => c.id === msg.from)?.name ?? msg.from.replace(/@g\.us$/, ''))
       : sender;
 
     // Filtro de tipo

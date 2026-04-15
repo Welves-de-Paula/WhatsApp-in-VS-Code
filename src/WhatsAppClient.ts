@@ -18,7 +18,7 @@ type WorkerToHostMsg =
   | { type: 'ready' }
   | { type: 'statusChange'; status: AccountStatus }
   | { type: 'chatsUpdate'; chats: Omit<ChatInfo, 'accountNickname'>[] }
-  | { type: 'message'; from: string; body: string; notifyName?: string }
+  | { type: 'message'; from: string; body: string; notifyName?: string; groupName?: string }
   | { type: 'sendResult'; requestId: string; success: boolean; messages?: MessageInfo[]; error?: string }
   | { type: 'log'; level: 'info' | 'error'; message: string };
 
@@ -50,6 +50,8 @@ export interface WWebMessage {
   fromMe: boolean;
   timestamp: number;
   _data?: { notifyName?: string };
+  /** Nome do grupo (preenchido pelo worker via cachedAllChats; apenas para mensagens de grupo) */
+  chatName?: string;
 }
 
 export class WhatsAppClient extends EventEmitter {
@@ -70,7 +72,7 @@ export class WhatsAppClient extends EventEmitter {
     (result: { success: boolean; messages?: MessageInfo[]; error?: string }) => void
   > = new Map();
 
-constructor(nickname: string, storagePath: string) {
+  constructor(nickname: string, storagePath: string) {
     super();
     this.nickname = nickname;
     this.storagePath = isWsl() && isWindowsPathAccessible()
@@ -82,7 +84,7 @@ constructor(nickname: string, storagePath: string) {
   // Public API
   // -------------------------------------------------------------------------
 
-async initialize(): Promise<void> {
+  async initialize(): Promise<void> {
     if (this.worker !== null || this.isInitializing) return;
     this.isInitializing = true;
 
@@ -189,7 +191,7 @@ async initialize(): Promise<void> {
     });
   }
 
-async destroy(): Promise<void> {
+  async destroy(): Promise<void> {
     if (isWsl() && isWindowsPathAccessible()) {
       void copySessionFromTempToWindows(this.nickname);
     }
@@ -259,6 +261,7 @@ async destroy(): Promise<void> {
           fromMe: false,
           timestamp: Math.floor(Date.now() / 1000),  // segundos Unix, consistente com WWebMessage
           _data: { notifyName: msg.notifyName },
+          chatName: msg.groupName,
         } as WWebMessage);
         break;
 
