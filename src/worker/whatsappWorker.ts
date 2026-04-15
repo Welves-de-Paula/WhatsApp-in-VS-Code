@@ -119,6 +119,17 @@ function forwardIncomingMessage(msg: any): void {
     const from = String(msg?.from ?? '');
     if (!from || from.includes('@broadcast') || isChannelJid(from)) return;
 
+    // Bloqueia notificação se o chat estiver silenciado.
+    // Fallback: se o chat não estiver no cache, permite a mensagem.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cachedChat = cachedAllChats.find((c: any) => (c.id?._serialized ?? c.id) === from);
+    if (cachedChat !== undefined) {
+      const exp = (cachedChat.muteExpiration as number | undefined) ?? 0;
+      const now = Math.floor(Date.now() / 1000);
+      const isMuted = exp < 0 || exp > now;
+      if (isMuted) return;
+    }
+
     const isStatus = Boolean(msg?.isStatus ?? msg?._data?.isStatus);
     if (isStatus || from === 'status@broadcast') return;
 
@@ -153,20 +164,6 @@ function forwardIncomingMessage(msg: any): void {
       (msg?.pushname as string | undefined) ||
       (msg?._data as { pushname?: string } | undefined)?.pushname ||
       undefined;
-
-    // Bloqueia notificação se o chat estiver silenciado.
-    // Fallback: se o chat não estiver no cache, permite a mensagem.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const cachedChat = cachedAllChats.find((c: any) => (c.id?._serialized ?? c.id) === from);
-    if (cachedChat !== undefined) {
-      const exp = (cachedChat.muteExpiration as number | undefined) ?? 0;
-      const now = Math.floor(Date.now() / 1000);
-      const isMuted =
-        (cachedChat.isMuted as boolean | undefined) === true ||
-        exp < 0 ||
-        exp > now;
-      if (isMuted) return;
-    }
 
     const isGroupMsg = from.endsWith('@g.us');
     const groupName: string | undefined = isGroupMsg
