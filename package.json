@@ -1,8 +1,8 @@
 {
     "name":  "whatsapp-vscode",
     "displayName":  "WhatsApp VSCode",
-    "description":  "Gerencie contas do WhatsApp direto no VS Code com notificaÃ§Ãµes e quick reply",
-    "version":  "0.1.4",
+    "description":  "Gerencie contas do WhatsApp direto no VS Code com notificaÃƒÂ§ÃƒÂµes e quick reply",
+    "version":  "0.1.5",
     "publisher":  "local",
     "engines":  {
                     "vscode":  "^1.80.0"
@@ -45,7 +45,7 @@
                                          },
                                          {
                                              "command":  "whatsapp.openNotificationSettings",
-                                             "title":  "WhatsApp: Configurar NotificaÃ§Ãµes"
+                                             "title":  "WhatsApp: Configurar NotificaÃƒÂ§ÃƒÂµes"
                                          }
                                      ],
                         "keybindings":  [

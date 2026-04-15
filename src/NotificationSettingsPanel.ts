@@ -265,6 +265,7 @@ export class NotificationSettingsPanel {
         ${sel('ding', s.sound, 'Ding (padrão)')}
         ${sel('chime', s.sound, 'Chime')}
         ${sel('pop', s.sound, 'Pop')}
+        ${sel('universfield', s.sound, 'Universfield')}
         ${sel('custom', s.sound, 'Personalizado…')}
         ${sel('none', s.sound, 'Sem som')}
       </select>

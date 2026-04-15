@@ -6,11 +6,11 @@ export type AccountStatus =
   | 'error';
 
 export type VisualAlert = 'banner' | 'statusBarFlash' | 'badgeOnly' | 'none';
-export type NotifFilter  = 'all' | 'direct' | 'groups';
-export type SoundOption  = 'ding' | 'chime' | 'pop' | 'none' | 'custom';
+export type NotifFilter = 'all' | 'direct' | 'groups';
+export type SoundOption = 'ding' | 'chime' | 'pop' | 'universfield' | 'none' | 'custom';
 
 export interface AccountNotificationSettings {
-  /** 'ding' | 'chime' | 'pop' | 'none' | 'custom' */
+  /** 'ding' | 'chime' | 'pop' | 'universfield' | 'none' | 'custom' */
   sound: SoundOption;
   /** Caminho absoluto para arquivo .wav customizado (usado apenas quando sound==='custom') */
   customSoundPath: string;
