@@ -560,6 +560,17 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       border-top: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
       margin: 4px 0 2px;
     }
+
+    /* ---- Registro de chamada ---- */
+    .call-log {
+      font-size: 12px;
+      font-style: italic;
+      opacity: 0.75;
+    }
+    .call-log.call-missed {
+      color: #e05b5b;
+      opacity: 1;
+    }
   </style>
 </head>
 <body data-chat-id="${escapeHtml(chatId)}" data-account-nickname="${escapeHtml(accountNickname)}">
@@ -801,6 +812,28 @@ function renderVCardHtml(vcard: string): string {
 
 function renderMediaContent(msg: MessageInfo): string {
   const type = msg.mediaType ?? '';
+
+  // --- Registro de chamada ---
+  if (type === 'call_log') {
+    let duration = 0;
+    let isVideo = false;
+    try {
+      const info = JSON.parse(msg.body) as { duration: number; isVideo: boolean };
+      duration = info.duration;
+      isVideo = info.isVideo;
+    } catch { /* ignore */ }
+    const icon = isVideo ? '📹' : '📞';
+    const missed = duration === 0 && !msg.fromMe;
+    const label = missed
+      ? `${icon} Chamada perdida`
+      : isVideo
+        ? `${icon} Videochamada`
+        : `${icon} Chamada de voz`;
+    const durationStr = duration > 0
+      ? ` · ${Math.floor(duration / 60)}:${String(duration % 60).padStart(2, '0')}`
+      : '';
+    return `<div class="call-log${missed ? ' call-missed' : ''}">${label}${durationStr}</div>`;
+  }
 
   // --- Contatos vCard ---
   if (type === 'vcard') {

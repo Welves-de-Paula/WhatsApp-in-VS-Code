@@ -438,6 +438,11 @@ process.on('message', (raw: unknown) => {
                 // vCards é um array de strings; serializa como JSON no body
                 const vcards = (m.vCards as string[] | undefined) ?? [];
                 base.body = JSON.stringify(vcards);
+              } else if (msgType === 'call_log') {
+                base.mediaType = 'call_log';
+                const duration = (m._data?.duration as number | undefined) ?? 0;
+                const isVideo = Boolean(m._data?.isVideo);
+                base.body = JSON.stringify({ duration, isVideo });
                 // --- Mídias binárias ---
               } else if (m.hasMedia) {
                 base.hasMedia = true;
