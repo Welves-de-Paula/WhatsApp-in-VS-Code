@@ -594,6 +594,35 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
     var container = document.getElementById('chat-container');
     container.scrollTop = container.scrollHeight;
 
+    // Converte todos os <audio> com src data: para blob: URLs.
+    // Data URIs muito grandes falham silenciosamente no Chromium/Electron;
+    // blob: URLs não têm esse limite e são mais confiáveis para reproção.
+    function convertAudioToBlob() {
+      document.querySelectorAll('audio[src^="data:"]').forEach(function (el) {
+        var audio = el;
+        var src = audio.getAttribute('src') || '';
+        try {
+          var commaIdx = src.indexOf(',');
+          if (commaIdx < 0) return;
+          var header = src.slice(5, commaIdx);  // remove 'data:'
+          var b64 = src.slice(commaIdx + 1);
+          // Extrai MIME sem o parâmetro ;base64
+          var mime = header.replace(/;base64$/, '').trim() || 'audio/ogg';
+          // Decodifica base64 para binário
+          var binary = atob(b64);
+          var len = binary.length;
+          var bytes = new Uint8Array(len);
+          for (var i = 0; i < len; i++) { bytes[i] = binary.charCodeAt(i); }
+          var blob = new Blob([bytes], { type: mime });
+          var blobUrl = URL.createObjectURL(blob);
+          audio.src = blobUrl;
+        } catch (e) {
+          console.error('[WA] convertAudioToBlob falhou:', e && e.message || String(e));
+        }
+      });
+    }
+    convertAudioToBlob();
+
     const sendButton = document.getElementById('send-btn');
     const input = document.getElementById('msg-input');
     const errorEl = document.getElementById('send-error');
@@ -609,6 +638,7 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
         const wasNearBottom =
           container.scrollHeight - container.scrollTop - container.clientHeight < 60;
         container.innerHTML = data.html || '<div class="empty">Nenhuma mensagem</div>';
+        convertAudioToBlob();
         if (wasNearBottom) {
           container.scrollTop = container.scrollHeight;
         }
@@ -745,7 +775,10 @@ function generateChatHtml(webview: vscode.Webview, messages: MessageInfo[], chat
       pauseOthers(player);
 
       if (audio.paused) {
-        audio.play().catch(function () { /* autoplay bloqueado — ignora */ });
+        audio.play().catch(function (err) {
+          console.error('[WA] audio.play() falhou:', err && err.message || String(err));
+          btn.textContent = '▶'; // reverte botão se play falhou
+        });
         btn.textContent = '⏸';
       } else {
         audio.pause();

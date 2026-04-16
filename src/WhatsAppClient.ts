@@ -18,6 +18,7 @@ type WorkerToHostMsg =
   | { type: 'ready' }
   | { type: 'statusChange'; status: AccountStatus }
   | { type: 'chatsUpdate'; chats: Omit<ChatInfo, 'accountNickname'>[] }
+  | { type: 'chatRead'; chatId: string }
   | { type: 'message'; from: string; body: string; notifyName?: string; groupName?: string }
   | { type: 'sendResult'; requestId: string; success: boolean; messages?: MessageInfo[]; error?: string }
   | { type: 'log'; level: 'info' | 'error'; message: string };
@@ -37,11 +38,13 @@ export declare interface WhatsAppClient {
   on(event: 'message', listener: (msg: WWebMessage) => void): this;
   on(event: 'statusChange', listener: (status: AccountStatus) => void): this;
   on(event: 'chatsUpdate', listener: (chats: ChatInfo[]) => void): this;
+  on(event: 'chatRead', listener: (chatId: string) => void): this;
   emit(event: 'qr', qr: string): boolean;
   emit(event: 'ready'): boolean;
   emit(event: 'message', msg: WWebMessage): boolean;
   emit(event: 'statusChange', status: AccountStatus): boolean;
   emit(event: 'chatsUpdate', chats: ChatInfo[]): boolean;
+  emit(event: 'chatRead', chatId: string): boolean;
 }
 
 export interface WWebMessage {
@@ -252,6 +255,10 @@ export class WhatsAppClient extends EventEmitter {
           accountNickname: this.nickname,
         }));
         this.emit('chatsUpdate', this.chats);
+        break;
+
+      case 'chatRead':
+        this.emit('chatRead', msg.chatId);
         break;
 
       case 'message':

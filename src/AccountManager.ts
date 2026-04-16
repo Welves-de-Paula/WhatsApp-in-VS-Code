@@ -17,10 +17,12 @@ export declare interface AccountManager {
   on(event: 'statusChanged', listener: (nickname: string, status: AccountStatus) => void): this;
   on(event: 'chatsUpdated', listener: (nickname: string) => void): this;
   on(event: 'message', listener: (nickname: string, msg: WWebMessage) => void): this;
+  on(event: 'chatRead', listener: (nickname: string, chatId: string) => void): this;
   emit(event: 'listChanged'): boolean;
   emit(event: 'statusChanged', nickname: string, status: AccountStatus): boolean;
   emit(event: 'chatsUpdated', nickname: string): boolean;
   emit(event: 'message', nickname: string, msg: WWebMessage): boolean;
+  emit(event: 'chatRead', nickname: string, chatId: string): boolean;
 }
 
 export class AccountManager extends EventEmitter {
@@ -28,7 +30,7 @@ export class AccountManager extends EventEmitter {
   private readonly qrPanels: Map<string, QRCodePanel> = new Map();
   private readonly storagePath: string;
 
-constructor(
+  constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly extensionUri: vscode.Uri,
   ) {
@@ -189,6 +191,10 @@ constructor(
       this.emit('message', nickname, msg);
     });
 
+    client.on('chatRead', (chatId) => {
+      this.emit('chatRead', nickname, chatId);
+    });
+
     this.clients.set(nickname, client);
     this.qrPanels.set(nickname, qrPanel);
 
@@ -203,7 +209,7 @@ constructor(
     }
   }
 
-private setupAccountsFileWatcher(): void {
+  private setupAccountsFileWatcher(): void {
     ensureStorageExists();
     const accountsFilePath = getAccountsFilePath();
 

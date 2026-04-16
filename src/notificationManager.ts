@@ -13,6 +13,14 @@ export class NotificationManager {
   private readonly flashTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   /** Texto original da status bar antes de qualquer flash ativo. */
   private flashOriginalText: string | undefined;
+  /**
+   * Timers de notificação pendentes por chatId.
+   * Permite cancelar o banner/flash se `chatRead` chegar antes do timer expirar.
+   * Chave: chatId  |  Valor: timer retornado por setTimeout
+   */
+  private readonly pendingNotifTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  /** chatId → nickname: mapeamento para saber qual flash cancelar ao receber chatRead */
+  private readonly pendingNotifAccount: Map<string, string> = new Map();
 
   constructor(
     private readonly accountManager: AccountManager,
@@ -30,6 +38,10 @@ export class NotificationManager {
 
     accountManager.on('message', (nickname, msg) => {
       this.handleMessage(nickname, msg);
+    });
+
+    accountManager.on('chatRead', (nickname, chatId) => {
+      this.handleChatRead(nickname, chatId);
     });
 
     accountManager.on('listChanged', () => this.updateBadge());
@@ -103,10 +115,78 @@ export class NotificationManager {
 
     // Alerta visual
     const preview = msg.body.length > 60 ? `${msg.body.slice(0, 60)}…` : msg.body;
-    this.showVisualAlert(nickname, sender, msg.from, preview, settings);
+    // Agenda com 600 ms de delay para permitir cancelamento via chatRead
+    this.scheduleDebouncedAlert(nickname, msg.from, sender, preview, settings);
 
     // Som
     this.playSound(settings);
+  }
+
+  /**
+   * Agenda o alerta visual com um delay de 600 ms.
+   * Se `chatRead` chegar para o mesmo chatId antes do timer disparar, o alerta é cancelado.
+   */
+  private scheduleDebouncedAlert(
+    nickname: string,
+    chatId: string,
+    sender: string,
+    preview: string,
+    settings: AccountNotificationSettings,
+  ): void {
+    // Cancela alerta anterior do mesmo chat (mensagens rápidas)
+    const existing = this.pendingNotifTimers.get(chatId);
+    if (existing) clearTimeout(existing);
+
+    this.pendingNotifAccount.set(chatId, nickname);
+    const timer = setTimeout(() => {
+      this.pendingNotifTimers.delete(chatId);
+      this.pendingNotifAccount.delete(chatId);
+      this.showVisualAlert(nickname, sender, chatId, preview, settings);
+    }, 600);
+    this.pendingNotifTimers.set(chatId, timer);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chat read handler
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Chamado quando o worker detecta que um chat foi lido (unreadCount → 0).
+   * Cancela alertas pendentes e limpa o flash da status bar se aplicável.
+   */
+  private handleChatRead(nickname: string, chatId: string): void {
+    this.output.appendLine(`[${new Date().toISOString()}] chat lido: ${chatId} (${nickname})`);
+
+    // Cancela o alerta visual pendente, se ainda não foi exibido
+    const pending = this.pendingNotifTimers.get(chatId);
+    if (pending) {
+      clearTimeout(pending);
+      this.pendingNotifTimers.delete(chatId);
+      this.pendingNotifAccount.delete(chatId);
+      this.output.appendLine(`  → alerta pendente cancelado para ${chatId}`);
+    }
+
+    // Se o flash da status bar está ativo para essa conta e não há mais
+    // alertas pendentes de outras mensagens dessa conta, encerra o flash.
+    if (this.flashTimers.has(nickname)) {
+      const hasOtherPending = [...this.pendingNotifAccount.values()].some(
+        (n) => n === nickname,
+      );
+      if (!hasOtherPending) {
+        const timer = this.flashTimers.get(nickname);
+        if (timer) clearTimeout(timer);
+        this.flashTimers.delete(nickname);
+        if (this.flashTimers.size === 0) {
+          this.statusBarItem.color = undefined;
+          this.statusBarItem.backgroundColor = undefined;
+          if (this.flashOriginalText !== undefined) {
+            this.statusBarItem.text = this.flashOriginalText;
+            this.flashOriginalText = undefined;
+          }
+          this.updateBadge();
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------

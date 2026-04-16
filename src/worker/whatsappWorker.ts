@@ -21,6 +21,7 @@ type WorkerToHostMsg =
   | { type: 'ready' }
   | { type: 'statusChange'; status: string }
   | { type: 'chatsUpdate'; chats: SerializedChat[] }
+  | { type: 'chatRead'; chatId: string }
   | { type: 'message'; from: string; body: string; notifyName?: string; groupName?: string }
   | { type: 'sendResult'; requestId: string; success: boolean; messages?: SerializedMessage[]; error?: string }
   | { type: 'log'; level: 'info' | 'error'; message: string };
@@ -81,19 +82,99 @@ function findSystemChrome(): string | undefined {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let client: any = null;
-/** Cache de todos os chats carregados — evita chamar getChats() repetidamente */
+/**
+ * Cache de chats indexado por id._serialized — acesso O(1).
+ * Substitui o array anterior para eliminar `.find()` em evento de mensagem.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let cachedAllChats: any[] = [];
+const cachedChats = new Map<string, any>();
+/**
+ * Conjunto de chatIds que tinham unreadCount > 0 na última atualização.
+ * Permite detectar a transição para 0 (chat lido) sem custo extra.
+ */
+const chatsWithUnread = new Set<string>();
 const recentIncomingMessageIds: string[] = [];
 
-/** Debounce para evitar chamadas duplas de loadChats (message + message_create) */
-let loadChatsTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * Atualiza incrementalmente apenas o chat afetado pela mensagem recebida.
+ * Evita chamar getChats() a cada evento.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function updateChatFromMessage(msg: any): Promise<void> {
+  if (!client) return;
+  const from = String(msg?.from ?? '');
+  if (!from) return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let chat: any = cachedChats.get(from);
+    if (!chat) {
+      // Fallback pontual: busca apenas este chat, não todos.
+      chat = await client.getChatById(from).catch(() => null);
+      if (!chat) return;
+    }
+    // Atualiza campos relevantes sem re-fetchar todo o objeto.
+    if (msg.body !== undefined) {
+      chat.lastMessage = chat.lastMessage ?? {};
+      chat.lastMessage.body = msg.body;
+      chat.lastMessage.timestamp = msg.timestamp ?? Math.floor(Date.now() / 1000);
+    }
+    if (!msg.fromMe) {
+      chat.unreadCount = (chat.unreadCount ?? 0) + 1;
+    }
+    cachedChats.set(from, chat);
+    sendChatsUpdate();
+  } catch {
+    // falha silenciosa — o estado do cache não é crítico
+  }
+}
+
+/**
+ * Reconstrói o cache completo via getChats().
+ * Chamado apenas na inicialização e reconexão.
+ */
 function scheduleLoadChats(): void {
-  if (loadChatsTimer) clearTimeout(loadChatsTimer);
-  loadChatsTimer = setTimeout(() => {
-    loadChatsTimer = null;
-    loadChats().catch(() => { });
-  }, 300);
+  // A chamada é direta (sem debounce) pois só ocorre em init/reconexão.
+  loadChats().catch(() => { });
+}
+
+/** Serializa e envia a lista de chats ao host via IPC.
+ *  Detecta transições unreadCount > 0 → 0 e emite `chatRead` para cada chat lido. */
+function sendChatsUpdate(): void {
+  const chats: SerializedChat[] = [];
+  const readChats: string[] = [];
+  const now = Math.floor(Date.now() / 1000);
+  for (const chat of cachedChats.values()) {
+    const isPinned = chat.pinned === true || chat.pin === 1;
+    const isArchived = chat.archived === true || chat.archived === 1;
+    if (!isPinned && isArchived) continue;
+    const exp = (chat.muteExpiration as number | undefined) ?? 0;
+    const isMuted =
+      (chat.isMuted as boolean | undefined) === true ||
+      exp < 0 ||
+      exp > now;
+    const chatId = chat.id._serialized as string;
+    const unreadCount = (chat.unreadCount as number) || 0;
+    // Detecta transição: estava não-lido e agora está lido
+    if (chatsWithUnread.has(chatId) && unreadCount === 0) {
+      readChats.push(chatId);
+      chatsWithUnread.delete(chatId);
+    } else if (unreadCount > 0) {
+      chatsWithUnread.add(chatId);
+    }
+    chats.push({
+      id: chatId,
+      name: chat.name as string,
+      lastMessage: (chat.lastMessage?.body as string | undefined) ?? '',
+      timestamp: (chat.lastMessage?.timestamp as number | undefined) ?? 0,
+      unreadCount,
+      isMuted,
+    });
+    if (chats.length === 30) break;
+  }
+  send({ type: 'chatsUpdate', chats });
+  for (const chatId of readChats) {
+    send({ type: 'chatRead', chatId });
+  }
 }
 
 function markIncomingMessageSeen(id: string): boolean {
@@ -119,10 +200,9 @@ function forwardIncomingMessage(msg: any): void {
     const from = String(msg?.from ?? '');
     if (!from || from.includes('@broadcast') || isChannelJid(from)) return;
 
-    // Bloqueia notificação se o chat estiver silenciado.
+    // Bloqueia notificação se o chat estiver silenciado — acesso O(1).
     // Fallback: se o chat não estiver no cache, permite a mensagem.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const cachedChat = cachedAllChats.find((c: any) => (c.id?._serialized ?? c.id) === from);
+    const cachedChat = cachedChats.get(from);
     if (cachedChat !== undefined) {
       const exp = (cachedChat.muteExpiration as number | undefined) ?? 0;
       const now = Math.floor(Date.now() / 1000);
@@ -166,6 +246,7 @@ function forwardIncomingMessage(msg: any): void {
       undefined;
 
     const isGroupMsg = from.endsWith('@g.us');
+    // cachedChat já foi resolvido com O(1) acima
     const groupName: string | undefined = isGroupMsg
       ? (cachedChat?.name as string | undefined)
       : undefined;
@@ -215,6 +296,8 @@ async function initialize(
   }
 
   client = new Client({
+    deviceName: 'VSCode Extension',
+
     authStrategy: new LocalAuth({
       clientId: sessionId,
       dataPath: storagePath,
@@ -243,11 +326,7 @@ async function initialize(
   client.on('ready', async () => {
     send({ type: 'statusChange', status: 'ready' });
     send({ type: 'ready' });
-    try {
-      await client.setDisplayName('VSCode');
-    } catch (err) {
-      log('error', `Falha ao definir nome de exibição: ${(err as Error).message}`);
-    }
+
     await loadChats();
   });
 
@@ -260,16 +339,16 @@ async function initialize(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   client.on('message', (msg: any) => {
     forwardIncomingMessage(msg);
-    scheduleLoadChats();
+    // Atualização incremental: só atualiza o chat afetado, sem getChats().
+    updateChatFromMessage(msg).catch(() => { });
   });
 
   // Em algumas versões/sessões multi-device o evento 'message' pode falhar.
   // Escutamos também 'message_create' e deduplicamos por id.
-  // O scheduleLoadChats evita chamadas duplas quando ambos disparam juntos.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   client.on('message_create', (msg: any) => {
     forwardIncomingMessage(msg);
-    scheduleLoadChats();
+    updateChatFromMessage(msg).catch(() => { });
   });
 
   await client.initialize();
@@ -281,36 +360,13 @@ async function loadChats(): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rawChats: any[] = await client.getChats();
-    cachedAllChats = rawChats; // mantém cache completo para getMessages
-    const filteredChats = rawChats.filter((chat: any) => {
-      const isPinned = chat.pinned === true || chat.pin === 1;
-      // Filter out archived chats (keep pinned ones)
-      const isArchived = chat.archived === true || chat.archived === 1;
-      return isPinned || !isArchived;
-    });
-    const chats: SerializedChat[] = filteredChats.slice(0, 30).map(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (chat: any): SerializedChat => {
-        // isMuted — respeita o silenciamento configurado no próprio WhatsApp.
-        // muteExpiration: 0 = não silenciado, -1 = sempre, >0 = até timestamp (segundos)
-        const exp = (chat.muteExpiration as number | undefined) ?? 0;
-        const now = Math.floor(Date.now() / 1000);
-        const isMuted =
-          (chat.isMuted as boolean | undefined) === true ||
-          exp < 0 ||
-          exp > now;
-
-        return {
-          id: chat.id._serialized as string,
-          name: chat.name as string,
-          lastMessage: (chat.lastMessage?.body as string | undefined) ?? '',
-          timestamp: (chat.lastMessage?.timestamp as number | undefined) ?? 0,
-          unreadCount: chat.unreadCount as number,
-          isMuted,
-        };
-      },
-    );
-    send({ type: 'chatsUpdate', chats });
+    // Reconstrói o Map — O(n) apenas na inicialização/reconexão.
+    cachedChats.clear();
+    for (const chat of rawChats) {
+      const id = chat.id?._serialized as string | undefined;
+      if (id) cachedChats.set(id, chat);
+    }
+    sendChatsUpdate();
   } catch (err) {
     // TargetCloseError happens during browser reload/reconnect — not fatal
     const msg = (err as Error).message ?? '';
@@ -417,14 +473,14 @@ process.on('message', (raw: unknown) => {
           });
 
           // Com o patch aplicado, fetchMessages é seguro de chamar
-          let allChats: any[] = cachedAllChats;
-          if (allChats.length === 0) {
-            allChats = await client.getChats();
-            cachedAllChats = allChats;
-          }
+          // Acesso O(1) via Map; fallback pontual se não estiver no cache.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const chat = allChats.find((c: any) => c.id._serialized === msg.chatId);
-          if (!chat) throw new Error('Chat não encontrado.');
+          let chat: any = cachedChats.get(msg.chatId);
+          if (!chat) {
+            chat = await client.getChatById(msg.chatId).catch(() => null);
+            if (!chat) throw new Error('Chat não encontrado.');
+            cachedChats.set(msg.chatId, chat);
+          }
 
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const rawMessages: any[] = await chat.fetchMessages({ limit: 50 });
@@ -471,9 +527,11 @@ process.on('message', (raw: unknown) => {
                     base.mediaData = media.data as string;
                     base.mediaMime = media.mimetype as string;
                     base.mediaFilename = (media.filename as string | undefined) ?? undefined;
+                  } else {
+                    log('error', `downloadMedia: resposta vazia para msg ${base.id} (tipo: ${msgType})`);
                   }
-                } catch {
-                  // download falhou — exibe placeholder no webview
+                } catch (dlErr) {
+                  log('error', `downloadMedia falhou para msg ${base.id} (tipo: ${msgType}): ${(dlErr as Error).message ?? dlErr}`);
                 }
               }
 
