@@ -2,8 +2,12 @@
     "name":  "whatsapp-vscode",
     "displayName":  "WhatsApp VSCode",
     "description":  "Gerencie contas do WhatsApp direto no VS Code",
-    "version":  "0.1.7",
+    "version":  "0.1.9",
     "publisher":  "local",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "https://github.com/Welves-de-Paula/WhatsApp-in-VS-Code"
+                   },
     "engines":  {
                     "vscode":  "^1.80.0"
                 },
@@ -45,7 +49,7 @@
                                          },
                                          {
                                              "command":  "whatsapp.openNotificationSettings",
-                                             "title":  "WhatsApp: Configurar NotificaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âµes"
+                                             "title":  "WhatsApp: Configurar NotificaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes"
                                          }
                                      ],
                         "keybindings":  [
